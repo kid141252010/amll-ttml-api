@@ -119,7 +119,13 @@ pub async fn list_lyrics<R: LyricStore>(store: &R, query: ListQuery) -> Paginate
             ListOrder::Desc => primary.reverse(),
             ListOrder::Asc => primary,
         };
-        primary.then_with(|| a.id.cmp(&b.id))
+        // 私库优先。游标分页要求显式 source（解析层已保证），此时恒为 tie，
+        // 不影响游标的 (timestamp, id) 二分
+        a.source
+            .rank()
+            .cmp(&b.source.rank())
+            .then_with(|| primary)
+            .then_with(|| a.id.cmp(&b.id))
     });
 
     let total = u64::try_from(ordered.len()).unwrap_or(u64::MAX);
@@ -344,6 +350,7 @@ mod tests {
             models::{
                 LyricIndexDB,
                 LyricMatchField,
+                LyricSource,
             },
             test_utils::make_song,
         },
@@ -475,6 +482,70 @@ mod tests {
         assert_eq!(res.pagination.total, 2);
         assert_eq!(res.pagination.total_pages, Some(1));
         assert!(!res.pagination.has_more);
+    }
+
+    #[tokio::test]
+    async fn list_lyrics_private_first_and_source_filter() {
+        // 私库条目时间戳更旧，但默认排序下必须排在公库前面
+        let mut private_entry = make_song(
+            "mine.ttml",
+            1_000,
+            &["Mine"],
+            &["Me"],
+            &[],
+            &[],
+            &[],
+            &[],
+        );
+        private_entry.source = LyricSource::Private;
+        let public_entry = make_song(
+            "theirs.ttml",
+            2_000,
+            &["Theirs"],
+            &["Them"],
+            &[],
+            &[],
+            &[],
+            &[],
+        );
+        let store = MemoryLyricStore {
+            db: Arc::new(LyricIndexDB::from_entries(vec![public_entry, private_entry])),
+            ..MemoryLyricStore::default()
+        };
+
+        let res = list_lyrics(&store, default_list_query()).await;
+        assert_eq!(
+            res.items.iter().map(|e| e.filename.as_str()).collect::<Vec<_>>(),
+            ["mine.ttml", "theirs.ttml"]
+        );
+
+        let only_private = list_lyrics(
+            &store,
+            ListQuery {
+                filter: ListFilter {
+                    source: Some(LyricSource::Private),
+                    ..ListFilter::default()
+                },
+                ..default_list_query()
+            },
+        )
+        .await;
+        assert_eq!(only_private.pagination.total, 1);
+        assert_eq!(only_private.items[0].filename.as_str(), "mine.ttml");
+
+        let only_public = list_lyrics(
+            &store,
+            ListQuery {
+                filter: ListFilter {
+                    source: Some(LyricSource::Public),
+                    ..ListFilter::default()
+                },
+                ..default_list_query()
+            },
+        )
+        .await;
+        assert_eq!(only_public.pagination.total, 1);
+        assert_eq!(only_public.items[0].filename.as_str(), "theirs.ttml");
     }
 
     #[tokio::test]

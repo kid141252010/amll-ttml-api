@@ -225,6 +225,11 @@ impl LyricIndexDB {
             .into_iter()
             .filter(|&idx| {
                 let entry = &self.entries[idx];
+                if let Some(source) = filter.source
+                    && entry.source != source
+                {
+                    return false;
+                }
                 if let Some(since) = filter.since
                     && entry.timestamp < since
                 {

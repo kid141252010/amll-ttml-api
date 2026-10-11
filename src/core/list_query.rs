@@ -8,7 +8,10 @@ use compact_str::CompactString;
 use crate::core::{
     LyricId,
     error::AppError,
-    models::SongEntry,
+    models::{
+        LyricSource,
+        SongEntry,
+    },
     pagination::Pagination,
 };
 
@@ -161,6 +164,8 @@ pub struct ListFilter {
     pub missing: IdKindSet,
     pub since: Option<u64>,
     pub until: Option<u64>,
+    /// 私库/公库过滤：`None` 表示全部（`source=all` 或未传）
+    pub source: Option<LyricSource>,
 }
 
 impl ListFilter {
@@ -173,6 +178,7 @@ impl ListFilter {
             && self.missing.is_empty()
             && self.since.is_none()
             && self.until.is_none()
+            && self.source.is_none()
     }
 }
 
