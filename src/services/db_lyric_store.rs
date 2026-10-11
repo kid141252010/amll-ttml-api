@@ -218,6 +218,7 @@ mod tests {
         entity::Entity::insert(entity::ActiveModel {
             id: Set(LyricId::from_filename("one.ttml").get().cast_signed()),
             filename: Set("one.ttml".to_string()),
+            source: Set("public".to_string()),
             timestamp: Set(1),
             track_names: Set(json!(["Test Song One"])),
             artist_names: Set(json!(["Artist Alpha"])),

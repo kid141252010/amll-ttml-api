@@ -214,6 +214,7 @@ mod tests {
     use compact_str::CompactString;
 
     use super::*;
+    use crate::core::models::LyricSource;
 
     #[test]
     fn map_song_to_item_includes_id() {
@@ -222,6 +223,7 @@ mod tests {
             id: LyricId::from_filename(filename),
             filename: CompactString::new(filename),
             timestamp: 1,
+            source: LyricSource::Public,
             track_names: vec![CompactString::new("ME!")].into_boxed_slice(),
             artist_names: Box::default(),
             album_names: Box::default(),
@@ -253,6 +255,7 @@ mod tests {
             id: LyricId::from_filename(filename),
             filename: CompactString::new(filename),
             timestamp: 1_768_754_400_682,
+            source: LyricSource::Public,
             track_names: Box::default(),
             artist_names: Box::default(),
             album_names: Box::default(),
@@ -311,6 +314,7 @@ mod tests {
             id: LyricId::from_filename(filename),
             filename: CompactString::new(filename),
             timestamp: 1,
+            source: LyricSource::Public,
             track_names: vec![CompactString::new("ME!")].into_boxed_slice(),
             artist_names: Box::default(),
             album_names: Box::default(),
