@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>歌词上传（管理员）</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main>
+    <h1>歌词上传（管理员）</h1>
+    <p class="hint">上传的歌词进入私有库，搜索时优先展示。密钥只保存在当前标签页的 sessionStorage 中。</p>
+
+    <form id="upload-form">
+      <div>
+        <label for="admin-secret">ADMIN_SECRET</label>
+        <input type="password" id="admin-secret" placeholder="输入管理员密钥" autocomplete="off">
+      </div>
+
+      <div>
+        <label for="file">TTML 文件</label>
+        <input type="file" id="file" accept=".ttml">
+      </div>
+
+      <div>
+        <label for="filename">文件名</label>
+        <input type="text" id="filename" placeholder="选择文件后自动填入，可修改">
+      </div>
+
+      <button type="submit" id="upload-btn">上传</button>
+    </form>
+
+    <div id="upload-result" aria-live="polite"></div>
+  </main>
+
+  <script>
+  'use strict';
+  const secretInput = document.getElementById('admin-secret');
+  const fileInput = document.getElementById('file');
+  const filenameInput = document.getElementById('filename');
+  const resultEl = document.getElementById('upload-result');
+  const uploadBtn = document.getElementById('upload-btn');
+
+  // 密钥只存 sessionStorage，关闭标签页即清除
+  secretInput.value = sessionStorage.getItem('amll_admin_secret') || '';
+  secretInput.addEventListener('input', () => {
+    sessionStorage.setItem('amll_admin_secret', secretInput.value);
+  });
+
+  fileInput.addEventListener('change', () => {
+    const f = fileInput.files[0];
+    if (f && !filenameInput.value) filenameInput.value = f.name;
+  });
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  document.getElementById('upload-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const secret = secretInput.value.trim();
+    const file = fileInput.files[0];
+    const filename = filenameInput.value.trim();
+    if (!secret) { resultEl.innerHTML = '<p class="error">请先填写 ADMIN_SECRET</p>'; return; }
+    if (!file) { resultEl.innerHTML = '<p class="error">请选择 .ttml 文件</p>'; return; }
+    if (!filename) { resultEl.innerHTML = '<p class="error">请填写文件名</p>'; return; }
+
+    const fd = new FormData();
+    fd.append('filename', filename);
+    fd.append('file', file, file.name);
+
+    uploadBtn.disabled = true;
+    resultEl.innerHTML = '<p class="hint">上传中…</p>';
+    try {
+      const resp = await fetch('/api/v1/admin/lyrics', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + secret },
+        body: fd,
+      });
+      let json = null;
+      try { json = await resp.json(); } catch (e) { /* 非 JSON 响应 */ }
+      if (resp.status === 401 || (json && json.status === 401)) {
+        resultEl.innerHTML = '<p class="error">密钥错误（401）：请检查 ADMIN_SECRET 是否正确</p>';
+        return;
+      }
+      if (!json || json.status !== 200) {
+        resultEl.innerHTML = '<p class="error">上传失败：' + escapeHtml((json && json.message) || ('HTTP ' + resp.status)) + '</p>';
+        return;
+      }
+      const d = json.data;
+      const searchUrl = '/?q=' + encodeURIComponent(d.filename);
+      resultEl.innerHTML =
+        '<div class="card"><div class="card-head"><span class="title">上传成功</span>' +
+        '<span class="badge private">私有</span></div>' +
+        '<div class="meta">id：' + escapeHtml(d.id) + '</div>' +
+        '<div class="meta">文件名：' + escapeHtml(d.filename) + '</div>' +
+        '<p><a class="btn" href="' + searchUrl + '">按此文件名搜索确认</a></p></div>';
+    } catch (e) {
+      resultEl.innerHTML = '<p class="error">请求失败：' + escapeHtml(e.message) + '</p>';
+    } finally {
+      uploadBtn.disabled = false;
+    }
+  });
+  </script>
+</body>
+</html>

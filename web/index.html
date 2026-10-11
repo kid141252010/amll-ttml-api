@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>歌词搜索</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main>
+    <h1>歌词搜索</h1>
+
+    <form id="search-form" action="/api/v1/lyrics/search" method="get">
+      <div>
+        <label for="q">关键词</label>
+        <input type="search" id="q" name="q" placeholder="输入搜索关键词">
+      </div>
+
+      <div>
+        <label for="musicName">歌曲名称</label>
+        <input type="text" id="musicName" name="musicName" placeholder="输入歌曲名称">
+      </div>
+
+      <div>
+        <label for="artistName">歌手名称</label>
+        <input type="text" id="artistName" name="artistName" placeholder="输入歌手名称">
+      </div>
+
+      <div>
+        <label for="albumName">专辑名称</label>
+        <input type="text" id="albumName" name="albumName" placeholder="输入专辑名称">
+      </div>
+
+      <div>
+        <label for="lyricText">歌词内容</label>
+        <input type="text" id="lyricText" name="lyricText" placeholder="输入歌词内容">
+      </div>
+
+      <div>
+        <label for="source">来源</label>
+        <select id="source" name="source">
+          <option value="all" selected>全部</option>
+          <option value="public">公开</option>
+          <option value="private">私有</option>
+        </select>
+      </div>
+
+      <button type="submit">搜索</button>
+    </form>
+
+    <div id="results" aria-live="polite"></div>
+
+    <div id="pagination" aria-label="分页">
+      <button type="button" id="previous-page" disabled>上一页</button>
+      <span id="page-info"></span>
+      <button type="button" id="next-page" disabled>下一页</button>
+    </div>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
