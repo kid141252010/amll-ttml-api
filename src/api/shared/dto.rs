@@ -20,7 +20,10 @@ use crate::{
     core::{
         LyricId,
         error::AppError,
-        models::SongEntry,
+        models::{
+            LyricSource,
+            SongEntry,
+        },
         pagination::PaginationInfo,
     },
 };
@@ -35,6 +38,9 @@ pub struct SongItem {
     /// 由上游 CI 处理投稿时生成并编码进文件名前缀，同一文件恒定。
     /// 它既不是合并进词库的时刻（两者可能相隔数月），也不是歌曲本身的发行日期
     pub created_at: u64,
+
+    /// 条目来源：公库（上游同步）或私库（用户上传）
+    pub source: LyricSource,
 
     pub music_names: Box<[CompactString]>,
     pub artist_names: Box<[CompactString]>,
@@ -188,6 +194,7 @@ pub fn map_song_to_item(
         id: song.id,
         filename: song.filename.to_string(),
         created_at: song.timestamp,
+        source: song.source,
         music_names: song.track_names.clone(),
         artist_names: song.artist_names.clone(),
         album_names: song.album_names.clone(),
@@ -214,6 +221,7 @@ mod tests {
     use compact_str::CompactString;
 
     use super::*;
+    use crate::core::models::LyricSource;
 
     #[test]
     fn map_song_to_item_includes_id() {
@@ -222,6 +230,7 @@ mod tests {
             id: LyricId::from_filename(filename),
             filename: CompactString::new(filename),
             timestamp: 1,
+            source: LyricSource::Public,
             track_names: vec![CompactString::new("ME!")].into_boxed_slice(),
             artist_names: Box::default(),
             album_names: Box::default(),
@@ -253,6 +262,7 @@ mod tests {
             id: LyricId::from_filename(filename),
             filename: CompactString::new(filename),
             timestamp: 1_768_754_400_682,
+            source: LyricSource::Public,
             track_names: Box::default(),
             artist_names: Box::default(),
             album_names: Box::default(),
@@ -311,6 +321,7 @@ mod tests {
             id: LyricId::from_filename(filename),
             filename: CompactString::new(filename),
             timestamp: 1,
+            source: LyricSource::Public,
             track_names: vec![CompactString::new("ME!")].into_boxed_slice(),
             artist_names: Box::default(),
             album_names: Box::default(),

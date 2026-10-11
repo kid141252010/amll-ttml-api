@@ -374,10 +374,10 @@ async fn lyrics_list_cursor_pagination_walks_whole_set() {
     let end = body[start..].find('"').expect("closed quote") + start;
     let next_cursor = &body[start..end];
 
-    // 第 2 页：通过 cursor 访问下一页
+    // 第 2 页：通过 cursor 访问下一页（游标分页须显式指定 source）
     let (status, body2) = get_body(
         &app,
-        &format!("/v1/lyrics/list?pageSize=1&cursor={next_cursor}"),
+        &format!("/v1/lyrics/list?pageSize=1&cursor={next_cursor}&source=public"),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -391,7 +391,7 @@ async fn lyrics_list_cursor_pagination_walks_whole_set() {
     // 通过 before 别名访问同样生效
     let (status, body_before) = get_body(
         &app,
-        &format!("/v1/lyrics/list?pageSize=1&before={next_cursor}"),
+        &format!("/v1/lyrics/list?pageSize=1&before={next_cursor}&source=public"),
     )
     .await;
     assert_eq!(status, StatusCode::OK);

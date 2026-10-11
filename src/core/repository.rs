@@ -34,7 +34,8 @@ impl LyricIndexDB {
     /// 匹配优先级：
     /// 1. `id`：53 位 ID。如果传入了 `id`，将进行 O(1) 查找并直接返回，忽略其他所有参数。
     /// 2. `filename`：如果传入了 `filename`（且未传入
-    ///    `id`），将精确匹配文件名并直接返回，忽略其他平台 ID。
+    ///    `id`），先用私库命名空间 ID 精确匹配，命中直接返回；
+    ///    否则用公库命名空间 ID 精确匹配，忽略其他平台 ID。
     /// 3. 各个平台 ID：如果既未传入 `id` 也未传入 `filename`，则用 AND 交集严格匹配所有传入的平台
     ///    ID（如 `ncm_music_ids`、`spotify_ids`）。只有某个歌词同时具有传入的所有平台 ID
     ///    时，才返回。
@@ -48,6 +49,13 @@ impl LyricIndexDB {
         }
 
         if let Some(ref filename) = query.filename {
+            // 私库优先：先用私库命名空间 ID 查找，命中直接返回
+            let private_id = LyricId::from_private_filename(filename);
+            if let Some(&idx) = self.id_idx.get(&private_id)
+                && self.entries[idx].filename.as_str() == filename.as_str()
+            {
+                return vec![idx];
+            }
             let derived_id = LyricId::from_filename(filename);
             return self
                 .id_idx
@@ -81,7 +89,8 @@ impl LyricIndexDB {
         apply_filter(&query.isrcs, &self.isrc_idx);
 
         let mut result = candidates.unwrap_or_default();
-        result.sort_unstable();
+        // 私库优先：先按 source 排序再按下标排序（保序去重）
+        result.sort_by_key(|&idx| (self.entries[idx].source.rank(), idx));
         result.dedup();
         result
     }
@@ -129,9 +138,11 @@ impl LyricIndexDB {
                 })
                 .collect();
             result.sort_unstable_by(|a, b| {
-                b.entry
-                    .timestamp
-                    .cmp(&a.entry.timestamp)
+                a.entry
+                    .source
+                    .rank()
+                    .cmp(&b.entry.source.rank())
+                    .then_with(|| b.entry.timestamp.cmp(&a.entry.timestamp))
                     .then_with(|| a.entry.id.cmp(&b.entry.id))
             });
             return result;
@@ -156,8 +167,11 @@ impl LyricIndexDB {
             .collect();
 
         scored_results.sort_unstable_by(|a, b| {
-            b.score
-                .cmp(&a.score)
+            a.entry
+                .source
+                .rank()
+                .cmp(&b.entry.source.rank())
+                .then_with(|| b.score.cmp(&a.score))
                 .then_with(|| b.entry.timestamp.cmp(&a.entry.timestamp))
                 // id 全局唯一，兜底保证全序。lrclib_search 直接在这个顺序上翻页，
                 // 少了它同分同时间戳的条目会在相邻页之间重复或漏掉。
@@ -211,6 +225,11 @@ impl LyricIndexDB {
             .into_iter()
             .filter(|&idx| {
                 let entry = &self.entries[idx];
+                if let Some(source) = filter.source
+                    && entry.source != source
+                {
+                    return false;
+                }
                 if let Some(since) = filter.since
                     && entry.timestamp < since
                 {
@@ -1138,5 +1157,21 @@ mod tests {
             ..ListFilter::default()
         };
         assert_eq!(matched_names(&db, &filter), ["isrc.ttml", "ncm.ttml"]);
+    }
+
+    #[test]
+    fn find_by_ids_filename_hits_private_first() {
+        use crate::core::models::LyricSource;
+        let mut priv_entry = make_song("priv.ttml", 1, &["T"], &["A"], &[], &[], &[], &[]);
+        priv_entry.source = LyricSource::Private;
+        priv_entry.id = LyricId::from_private_filename("priv.ttml");
+        let pub_entry = make_song("pub.ttml", 2, &["T"], &["A"], &[], &[], &[], &[]);
+        let db = LyricIndexDB::from_entries(vec![priv_entry, pub_entry]);
+        let query = IdQuery {
+            filename: Some("priv.ttml".to_string()),
+            ..IdQuery::default()
+        };
+        let result = db.find_by_ids(&query);
+        assert_eq!(result, vec![0]);
     }
 }

@@ -22,9 +22,11 @@ use futures::{
 };
 use reqwest::Client;
 use sea_orm::{
+    ColumnTrait,
     DatabaseConnection,
     EntityTrait,
     PaginatorTrait,
+    QueryFilter,
     QuerySelect,
     Set,
 };
@@ -407,9 +409,30 @@ impl SyncService {
     }
 
     async fn batch_upsert_entries(&self, models: &[entity::Model]) -> Result<()> {
+        // 私库文件名集合：公库同步永远不能覆盖私库行。表级 filename UNIQUE 使重名
+        // 在正常流程下不可能发生（上传接口会先报 400），这里是纵深防御——
+        // 命中私库文件名的模型直接跳过，不报错、不中断整批同步
+        let private_filenames: HashSet<String> = entity::Entity::find()
+            .select_only()
+            .column(entity::Column::Filename)
+            .filter(entity::Column::Source.eq("private"))
+            .into_tuple::<String>()
+            .all(&self.db)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+
         for chunk in models.chunks(UPSERT_BATCH_SIZE) {
-            let active_models: Vec<entity::ActiveModel> =
-                chunk.iter().cloned().map(Into::into).collect();
+            let active_models: Vec<entity::ActiveModel> = chunk
+                .iter()
+                .filter(|m| !private_filenames.contains(m.filename.as_str()))
+                .cloned()
+                .map(Into::into)
+                .collect();
+            if active_models.is_empty() {
+                continue;
+            }
 
             entity::Entity::insert_many(active_models)
                 .on_conflict(
@@ -488,6 +511,7 @@ pub fn build_entity_from_ttml(
     entity::Model {
         id,
         filename: filename.to_string(),
+        source: "public".to_string(),
         timestamp,
         track_names: flatten_vec(&meta.title),
         artist_names: flatten_vec(&meta.artist),
@@ -586,6 +610,7 @@ mod tests {
         assert_eq!(model.album_names, json!(["Test Album"]));
         assert_eq!(model.author_ids, json!(["999"]));
         assert_eq!(model.author_usernames, json!(["dev_user"]));
+        assert_eq!(model.source, "public");
         // Platform IDs are initialized to empty in build_entity_from_ttml, as they are sourced from
         // index.jsonl
         assert_eq!(model.ncm_music_ids, json!([]));
@@ -625,5 +650,67 @@ mod tests {
         assert_eq!(model.apple_music_ids, json!(["am123"]));
         assert_eq!(model.spotify_ids, json!(["sp1001"]));
         assert_eq!(model.isrcs, json!(["US123"]));
+    }
+
+    #[tokio::test]
+    async fn public_upsert_never_overwrites_private_row() {
+        use crate::core::db::setup::init_db;
+
+        let conn = init_db("sqlite::memory:").await.expect("init db");
+        let private_model = entity::ActiveModel {
+            id: Set(LyricId::from_private_filename("shared.ttml").get().cast_signed()),
+            filename: Set("shared.ttml".to_string()),
+            timestamp: Set(1),
+            source: Set("private".to_string()),
+            track_names: Set(json!([])),
+            artist_names: Set(json!([])),
+            album_names: Set(json!([])),
+            normalized_track_names: Set(json!([])),
+            normalized_artist_names: Set(json!([])),
+            normalized_album_names: Set(json!([])),
+            ncm_music_ids: Set(json!([])),
+            qq_music_ids: Set(json!([])),
+            apple_music_ids: Set(json!([])),
+            spotify_ids: Set(json!([])),
+            isrcs: Set(json!([])),
+            author_ids: Set(json!([])),
+            author_usernames: Set(json!([])),
+            lyric_text: Set("private lyric".to_string()),
+            bg_vocal_text: Set(String::new()),
+            raw_ttml: Set("<tt>private</tt>".to_string()),
+        };
+        entity::Entity::insert(private_model)
+            .exec(&conn)
+            .await
+            .expect("seed private row");
+
+        let ttml = r#"<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="00:01.000" end="00:02.000">public text</p></div></body></tt>"#;
+        let parsed = ttml_processor::parse_ttml(ttml).expect("parse ttml");
+        let colliding = build_entity_from_ttml("shared.ttml", ttml, &parsed);
+        let normal = build_entity_from_ttml("public-only.ttml", ttml, &parsed);
+        let svc = SyncService::new(conn.clone(), reqwest::Client::new());
+        svc.batch_upsert_entries(&[colliding, normal])
+            .await
+            .expect("upsert");
+
+        // 私库行未被覆盖
+        let row = entity::Entity::find_by_id(
+            LyricId::from_private_filename("shared.ttml").get().cast_signed(),
+        )
+        .one(&conn)
+        .await
+        .expect("query")
+        .expect("row exists");
+        assert_eq!(row.source, "private");
+        assert_eq!(row.lyric_text, "private lyric");
+
+        // 同批不冲突的公库行正常写入
+        let public_row = entity::Entity::find()
+            .filter(entity::Column::Filename.eq("public-only.ttml"))
+            .one(&conn)
+            .await
+            .expect("query")
+            .expect("public row exists");
+        assert_eq!(public_row.source, "public");
     }
 }

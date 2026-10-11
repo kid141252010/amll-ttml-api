@@ -285,6 +285,7 @@ sudo systemctl restart amll-ttml-api@3001.service
 
 * **客户端标识**：只存 `X-Real-IP` 的 HMAC 摘要，不存原始 IP。需要封禁时用 Nginx access log 里的原始 IP。未设置 `ANALYTICS_IP_KEY` 时照常记录，只是客户端标识留空，并在启动时报错上报 Sentry；更换密钥等同于独立客户端重新开始计数。
 * **团队下载**：团队用 `ANALYTICS_SECRET` 作为 token，经 `/v1/admin/analytics/files` 下载每日文件，用法见 [`docs/analytics.md`](docs/analytics.md)。未设置时下载端点返回 500；token 泄露时换一个新值并重启服务即可作废旧的。
+* **私人歌词上传**：`POST /v1/admin/lyrics`（multipart，`filename` + `file` 字段），用 `ADMIN_SECRET` 作为 Bearer token。文件名须为 `.ttml` 且不含路径分隔符；同名重传覆盖，公库已有同名文件时返回 400；未设置 `ADMIN_SECRET` 时返回 500。token 泄露时换一个新值并重启服务即可作废旧的。
 * **保留策略**：每日文件在服务器上保留 90 天；统计目录总大小超过 8 GiB 时从最旧的文件开始提前删除（日志 `Analytics directory over its size cap`）。长期存档靠团队每月把上个月的文件同步到网盘。
 * **磁盘水位**：磁盘剩余空间低于 3 GiB 时暂停写入，日志出现 `Free disk space below the analytics watermark`，空间恢复后自动继续。
 * **资源占用**：按 200 万请求 / 天估算，每日文件约 50 MB；转换时内存峰值约增加 70 MiB，持续一两分钟。缓冲库删除旧行后文件大小不会缩小，空闲页会被新数据复用。

@@ -62,12 +62,14 @@ mod tests {
     use compact_str::CompactString;
 
     use super::*;
+    use crate::core::models::LyricSource;
 
     fn make_test_entry() -> SongEntry {
         SongEntry {
             id: LyricId::from_u64_masked(LyricId::MAX),
             filename: CompactString::new("test.ttml"),
             timestamp: 123_456_789,
+            source: LyricSource::Public,
             track_names: vec![
                 CompactString::new("Primary Title"),
                 CompactString::new("Secondary Title"),

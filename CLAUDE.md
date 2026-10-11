@@ -146,6 +146,7 @@ lib.rs 路由 → api/<模块>/extractor.rs → api/<模块>/handler.rs → serv
 - **游标分页与增量同步**：
   - 针对词库镜像遍历，支持 `cursor=<timestamp>_<id>`（及别名 `before`），通过 `partition_point` 二分精确定位，免疫深翻页漂移；
   - 游标基于条目创建时刻，仅支持在 `sort=createdAt`（默认排序）下使用，与其它排序或 `page` 混用均报 400；
+  - 私库引入后 `source=all` 的排序是 `(source_rank, timestamp)` 两级，不满足二分前提：游标分页必须显式传 `source=private` 或 `source=public`（未传报 400）；
   - 增量拉取可传 `since=<timestamp>`，当增量数据超过 `pageSize` 时可搭配 `cursor` 继续翻页。
 - `paginate` 的 `total` 取自迭代器 `len()`，所以「过滤后 total 自动收缩」是零成本的。
 
@@ -164,9 +165,9 @@ lib.rs 路由 → api/<模块>/extractor.rs → api/<模块>/handler.rs → serv
 - **歌词搜索与列表接口**（`GET /v1/lyrics/search`、`GET /v1/lrclib/search` 及 `GET /v1/lyrics/list`）：`public, max-age=3600, s-maxage=7200, stale-while-revalidate=1800`（客户端 1 小时 / CDN 2 小时 / SWR 30 分钟）。
 - **404 未找到响应**（`LyricNotFound` 及未匹配路由）：`public, max-age=3600, s-maxage=7200`（客户端 1 小时 / CDN 2 小时负缓存）。
 - **服务状态与探针**（`GET /v1/status` 及 `GET /v1/version`）：`no-store`（禁止任何层级缓存，保证 uptime 与探针实时性）。
-- **内部运维端点**（`GET /v1/admin/analytics/files` 及 `.../files/{name}`）：`no-store`，含错误响应（带 token 的内容不进任何缓存）。
+- **内部运维端点**（`GET /v1/admin/analytics/files` 及 `.../files/{name}`、`POST /v1/admin/lyrics`）：`no-store`，含错误响应（带 token 的内容不进任何缓存）。
 - **进程内缓存**：`DbLyricStore` 的 `ttml_cache` 与 `formatted_lyric_cache` TTL 均为 14 天，与上面的 HTTP 时限相互独立；实际存活受下面的主动失效约束。
-- **主动失效**：仅在数据同步且发生实际更新时（`res.status == SyncStatus::Updated`），调用 `invalidate_caches()` 清空进程内 Moka 缓存并原子切换倒排索引；若同步被跳过或无数据变更（`SyncStatus::Skipped`），则完整保留热缓存与现有索引。
+- **主动失效**：仅在数据同步且发生实际更新时（`res.status == SyncStatus::Updated`），调用 `invalidate_caches()` 清空进程内 Moka 缓存并原子切换倒排索引；若同步被跳过或无数据变更（`SyncStatus::Skipped`），则完整保留热缓存与现有索引。私库上传成功后同样重建索引并清空缓存，保证上传立即可查。
 
 ### 条件请求（ETag）
 
@@ -222,6 +223,11 @@ CORS 与 Trace 之内），为响应生成 `ETag` 并处理 `If-None-Match`，�
   `no-store`。文件名只认严格的 `YYYY-MM-DD.parquet`（`day::parse_file_name`），杜绝路径穿越。
   内部接口，不写进公开接口文档；团队用法、同步脚本 `scripts/analytics_sync.py` 与 DuckDB 初始化
   `docs/analytics/setup.sql` 见 `docs/analytics.md`，那里的 SQL 都要能直接运行。UA 归类表
+- **私人歌词上传**（`api/admin/upload.rs`）：`POST /v1/admin/lyrics`，multipart（`filename` + `file`
+  字段），`ADMIN_SECRET` Bearer 鉴权（常量时间比较，未配密钥时 500）；文件名只认 `.ttml`
+  且不含路径分隔符，TTML 解析失败 400；以 `source='private'` upsert（同名重传整行更新，公库
+  重名 400），写后重建倒排索引并清空缓存。内部接口，不写进公开接口文档；私库在读路径
+  （get/search/list）恒优先于公库，同步器只碰公库行。
   `clients.csv` **不入库**（会公开暴露有哪些应用在用接口），随数据放在团队网盘，
   本地位于被忽略的 `amll-analytics/` 目录。
 

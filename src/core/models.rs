@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use compact_str::CompactString;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::core::{
     LyricId,
@@ -18,11 +18,51 @@ pub struct RawIndexEntry {
     pub metadata: Vec<(String, Vec<String>)>,
 }
 
+/// 歌词条目来源：公库（上游 amll-ttml-db 同步）或私库（用户上传）
+///
+/// 读路径按 `rank()` 排序，私库永远排在公库前面
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LyricSource {
+    #[default]
+    Public,
+    Private,
+}
+
+impl LyricSource {
+    /// 排序键：私库 0，公库 1，数值越小越优先
+    #[must_use]
+    pub const fn rank(self) -> u8 {
+        match self {
+            Self::Private => 0,
+            Self::Public => 1,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Private => "private",
+        }
+    }
+}
+
+impl From<&str> for LyricSource {
+    fn from(s: &str) -> Self {
+        match s {
+            "private" => Self::Private,
+            _ => Self::Public,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SongEntry {
     pub id: LyricId,
     pub filename: CompactString,
     pub timestamp: u64,
+    pub source: LyricSource,
 
     pub track_names: Box<[CompactString]>,
     pub artist_names: Box<[CompactString]>,
@@ -186,6 +226,22 @@ pub struct LyricSearchResult {
 mod tests {
     use super::*;
     use crate::core::test_utils::make_song;
+
+    #[test]
+    fn lyric_source_conversion_and_serialization() {
+        assert_eq!(LyricSource::from("private"), LyricSource::Private);
+        assert_eq!(LyricSource::from("public"), LyricSource::Public);
+        assert_eq!(LyricSource::from("bogus"), LyricSource::Public);
+        assert_eq!(LyricSource::from(""), LyricSource::Public);
+        assert!(LyricSource::Private.rank() < LyricSource::Public.rank());
+
+        let serialized = serde_json::to_string(&LyricSource::Private).unwrap();
+        assert_eq!(serialized, r#""private""#);
+        assert_eq!(
+            serde_json::from_str::<LyricSource>(&serialized).unwrap(),
+            LyricSource::Private
+        );
+    }
 
     #[test]
     fn from_entries_empty() {

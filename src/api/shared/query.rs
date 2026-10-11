@@ -14,6 +14,7 @@ use crate::core::{
     },
     models::{
         IdQuery,
+        LyricSource,
         SearchQuery,
     },
     pagination::Pagination,
@@ -156,6 +157,7 @@ pub fn parse_list_query(query_str: &str) -> Result<ListQuery, AppError> {
     let mut before_raw: Option<String> = None;
     let mut since_raw: Option<String> = None;
     let mut until_raw: Option<String> = None;
+    let mut source_raw: Option<String> = None;
     let mut filter = ListFilter::default();
 
     for (key, value) in form_urlencoded::parse(query_str.as_bytes()) {
@@ -173,6 +175,7 @@ pub fn parse_list_query(query_str: &str) -> Result<ListQuery, AppError> {
             "before" => before_raw = Some(value),
             "since" => since_raw = Some(value),
             "until" => until_raw = Some(value),
+            "source" => source_raw = Some(value),
             "authorId" => filter.author_id = Some(value),
             "authorUsername" => filter.author_username = Some(value),
             "hasId" => collect_id_kinds("hasId", &value, &mut filter.has)?,
@@ -234,6 +237,20 @@ pub fn parse_list_query(query_str: &str) -> Result<ListQuery, AppError> {
     filter.since = since;
     filter.until = until;
 
+    filter.source = match source_raw.as_deref().map(str::trim) {
+        None => None,
+        Some(s) => match s.to_lowercase().as_str() {
+            "private" => Some(LyricSource::Private),
+            "public" => Some(LyricSource::Public),
+            "all" => None,
+            _ => {
+                return Err(AppError::BadRequest(format!(
+                    "'source' must be one of 'private', 'public', 'all', got '{s}'."
+                )));
+            }
+        },
+    };
+
     let pagination = Pagination::from_raw(page_raw.as_deref(), page_size_raw.as_deref())?;
     let sort = match sort_raw.as_deref().map(str::trim) {
         None => ListSort::default(),
@@ -264,6 +281,14 @@ pub fn parse_list_query(query_str: &str) -> Result<ListQuery, AppError> {
             if sort != ListSort::CreatedAt {
                 return Err(AppError::BadRequest(
                     "Cursor pagination is only supported with 'sort=createdAt'.".into(),
+                ));
+            }
+            // 游标二分依赖 (timestamp, id) 全序；source=all 时私库优先会打乱它，
+            // 因此游标分页必须显式指定 source=private 或 source=public
+            if filter.source.is_none() {
+                return Err(AppError::BadRequest(
+                    "'cursor' pagination requires an explicit 'source=private' or 'source=public'."
+                        .into(),
                 ));
             }
             Some(Cursor::parse(s)?)
@@ -670,6 +695,38 @@ mod tests {
     }
 
     #[test]
+    fn list_query_source_param() {
+        use crate::core::models::LyricSource;
+
+        assert_eq!(
+            parse_list_query("source=private").unwrap().filter.source,
+            Some(LyricSource::Private)
+        );
+        assert_eq!(
+            parse_list_query("source=PUBLIC").unwrap().filter.source,
+            Some(LyricSource::Public)
+        );
+        // all 等价于不传
+        assert_eq!(
+            parse_list_query("source=all").unwrap().filter.source,
+            None
+        );
+        assert_eq!(parse_list_query("").unwrap().filter.source, None);
+
+        let result = parse_list_query("source=bogus");
+        assert!(matches!(result, Err(AppError::BadRequest(_))));
+    }
+
+    #[test]
+    fn list_query_cursor_requires_explicit_source() {
+        let result = parse_list_query("cursor=1768754400682_699269132670751");
+        assert!(matches!(result, Err(AppError::BadRequest(_))));
+
+        let ok = parse_list_query("cursor=1768754400682_699269132670751&source=public").unwrap();
+        assert!(ok.cursor.is_some());
+    }
+
+    #[test]
     fn list_query_parses_all_sort_values() {
         for (raw, expected) in [
             ("createdAt", ListSort::CreatedAt),
@@ -843,7 +900,7 @@ mod tests {
 
     #[test]
     fn list_query_parses_cursor() {
-        let query = parse_list_query("cursor=1768754400682_699269132670751").unwrap();
+        let query = parse_list_query("cursor=1768754400682_699269132670751&source=public").unwrap();
         let cursor = query.cursor.unwrap();
         assert_eq!(cursor.timestamp, 1_768_754_400_682);
         assert_eq!(cursor.id.get(), 699_269_132_670_751);
@@ -851,7 +908,7 @@ mod tests {
 
     #[test]
     fn list_query_parses_before_as_cursor_alias() {
-        let query = parse_list_query("before=1768754400682_699269132670751").unwrap();
+        let query = parse_list_query("before=1768754400682_699269132670751&source=private").unwrap();
         let cursor = query.cursor.unwrap();
         assert_eq!(cursor.timestamp, 1_768_754_400_682);
         assert_eq!(cursor.id.get(), 699_269_132_670_751);
@@ -860,7 +917,7 @@ mod tests {
     #[test]
     fn list_query_allows_identical_cursor_and_before() {
         let query = parse_list_query(
-            "cursor=1768754400682_699269132670751&before=1768754400682_699269132670751",
+            "cursor=1768754400682_699269132670751&before=1768754400682_699269132670751&source=public",
         )
         .unwrap();
         assert!(query.cursor.is_some());

@@ -3,7 +3,10 @@ use compact_str::CompactString;
 use crate::core::{
     LyricId,
     matcher::normalize_name_for_comparison,
-    models::SongEntry,
+    models::{
+        LyricSource,
+        SongEntry,
+    },
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -21,6 +24,7 @@ pub fn make_song(
         id: LyricId::from_filename(filename),
         filename: CompactString::new(filename),
         timestamp,
+        source: LyricSource::Public,
         track_names: track_names.iter().map(|s| CompactString::new(*s)).collect(),
         artist_names: artist_names
             .iter()

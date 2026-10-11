@@ -11,6 +11,7 @@ pub struct Model {
     pub id: i64,
     #[sea_orm(unique, indexed)]
     pub filename: String,
+    pub source: String,
     pub timestamp: i64,
 
     pub track_names: Json,

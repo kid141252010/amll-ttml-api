@@ -61,6 +61,14 @@ impl LyricId {
         Self::from_u64_masked(hash)
     }
 
+    /// 从私库文件名生成 [`LyricId`]：哈希输入加 `private:` 前缀，与公库命名空间隔离
+    ///
+    /// 采用与 [`LyricId::from_filename`] 相同的 FNV-1a 算法，仅输入不同
+    #[must_use]
+    pub fn from_private_filename(filename: &str) -> Self {
+        Self::from_filename(&format!("private:{filename}"))
+    }
+
     /// 从字符串解析并校验 53 位边界
     pub fn parse(s: &str) -> Result<Self, AppError> {
         s.parse::<u64>().map_or_else(
@@ -145,6 +153,17 @@ mod tests {
         let id1 = LyricId::from_filename("test.ttml");
         let id2 = LyricId::from_filename("test.ttml");
         assert_eq!(id1, id2);
+        assert!(id1.get() <= LyricId::MAX);
+    }
+
+    #[test]
+    fn test_from_private_filename_deterministic() {
+        let id1 = LyricId::from_private_filename("test.ttml");
+        let id2 = LyricId::from_private_filename("test.ttml");
+        let public_id = LyricId::from_filename("test.ttml");
+
+        assert_eq!(id1, id2);
+        assert_ne!(id1, public_id);
         assert!(id1.get() <= LyricId::MAX);
     }
 }

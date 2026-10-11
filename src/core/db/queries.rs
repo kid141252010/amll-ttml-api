@@ -28,6 +28,7 @@ use crate::{
         models::{
             LyricHit,
             LyricMatchField,
+            LyricSource,
             SongEntry,
         },
     },
@@ -71,6 +72,7 @@ pub async fn fetch_song_entries(conn: &DatabaseConnection) -> Result<Vec<SongEnt
             entity::Column::Isrcs,
             entity::Column::AuthorIds,
             entity::Column::AuthorUsernames,
+            entity::Column::Source,
         ])
         .into_model::<MetadataRow>()
         .all(conn)
@@ -99,6 +101,7 @@ struct MetadataRow {
     isrcs: Value,
     author_ids: Value,
     author_usernames: Value,
+    source: String,
 }
 
 impl From<MetadataRow> for SongEntry {
@@ -120,6 +123,7 @@ impl From<MetadataRow> for SongEntry {
             isrcs: json_to_compact_box(row.isrcs),
             author_ids: json_to_compact_box(row.author_ids),
             author_usernames: json_to_compact_box(row.author_usernames),
+            source: LyricSource::from(row.source.as_str()),
         }
     }
 }
@@ -237,6 +241,7 @@ mod tests {
         entity::ActiveModel {
             id: Set(LyricId::from_filename(filename).get().cast_signed()),
             filename: Set(filename.to_string()),
+            source: Set("public".to_string()),
             timestamp: Set(0),
             track_names: Set(empty.clone()),
             artist_names: Set(empty.clone()),
@@ -386,5 +391,22 @@ mod tests {
         let conn = init_db("sqlite::memory:").await.expect("init db");
         let entries = fetch_song_entries(&conn).await.expect("fetch entries");
         assert!(entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fetch_song_entries_maps_private_source() {
+        use crate::core::models::LyricSource;
+
+        let conn = init_db("sqlite::memory:").await.expect("init db");
+        let mut row = seed_row("priv.ttml", "lyric", "bg", "<tt/>");
+        row.source = Set("private".to_string());
+        entity::Entity::insert(row)
+            .exec(&conn)
+            .await
+            .expect("seed private row");
+
+        let entries = fetch_song_entries(&conn).await.expect("fetch entries");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].source, LyricSource::Private);
     }
 }
