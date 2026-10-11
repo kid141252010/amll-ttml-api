@@ -87,12 +87,13 @@ pub fn create_app(state: AppState) -> Router {
     let router = router
         .route("/", get(webui::serve_index))
         .route("/admin", get(webui::serve_admin))
+        .route("/app.js", get(webui::serve_app_js))
+        .route("/style.css", get(webui::serve_style_css))
         // SPlayer-Next 兼容：{host}/%p/%s.ttml 文件直链（两段捕获，不与静态段冲突）
         .route(
             "/{platform}/{file}",
             get(api::ttml_file::handler::handle_ttml_file),
-        )
-        .route("/{*path}", get(webui::serve_asset));
+        );
 
     let router = router
         .fallback(|| async { AppError::NotFound })
