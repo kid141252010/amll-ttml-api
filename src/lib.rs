@@ -87,7 +87,14 @@ pub fn create_app(state: AppState) -> Router {
     let router = router
         .route("/", get(webui::serve_index))
         .route("/admin", get(webui::serve_admin))
-        .route("/{*path}", get(webui::serve_asset));
+        .route("/app.js", get(webui::serve_app_js))
+        .route("/style.css", get(webui::serve_style_css))
+        // SPlayer-Next 兼容：{host}/%p/%s.ttml 文件直链
+        //（%p 为平台目录名：ncm-lyrics / qq-lyrics / am-lyrics / spotify-lyrics）
+        .route(
+            "/{platform}/{file}",
+            get(api::ttml_file::handler::handle_ttml_file),
+        );
 
     let router = router
         .fallback(|| async { AppError::NotFound })
