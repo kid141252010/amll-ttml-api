@@ -1,4 +1,5 @@
 use axum::{
+    extract::Path,
     http::header::CONTENT_TYPE,
     response::{IntoResponse, Response},
 };
@@ -18,14 +19,8 @@ pub async fn serve_admin() -> Result<impl IntoResponse, AppError> {
     serve_file("admin.html")
 }
 
-// 静态资源用显式路由逐个注册：`/{*path}` 通配符会与 `/{platform}/{file}`
-//（SPlayer-Next TTML 直链）在 Axum 0.8 的路由表里冲突导致建表 panic。
-pub async fn serve_app_js() -> Result<impl IntoResponse, AppError> {
-    serve_file("app.js")
-}
-
-pub async fn serve_style_css() -> Result<impl IntoResponse, AppError> {
-    serve_file("style.css")
+pub async fn serve_asset(Path(path): Path<String>) -> Result<impl IntoResponse, AppError> {
+    serve_file(&path)
 }
 
 fn serve_file(path: &str) -> Result<Response, AppError> {
