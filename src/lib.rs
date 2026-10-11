@@ -39,6 +39,7 @@ mod api;
 mod core;
 mod services;
 mod utils;
+mod webui;
 
 #[cfg(test)]
 mod wire_format_tests;
@@ -82,6 +83,11 @@ pub fn create_app(state: AppState) -> Router {
     for prefix in API_PREFIXES {
         router = router.nest(prefix, v1_routes.clone());
     }
+
+    let router = router
+        .route("/", get(webui::serve_index))
+        .route("/admin", get(webui::serve_admin))
+        .route("/{*path}", get(webui::serve_asset));
 
     let router = router
         .fallback(|| async { AppError::NotFound })
