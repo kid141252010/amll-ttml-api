@@ -227,7 +227,13 @@ pub async fn get_lyric<R: LyricStore>(
         .into_iter()
         .map(|idx| &db.entries[idx])
         .collect();
-    candidates.sort_by_key(|b| std::cmp::Reverse(b.timestamp));
+    // 私库优先：同 source 内再取时间戳最新的
+    candidates.sort_by(|a, b| {
+        a.source
+            .rank()
+            .cmp(&b.source.rank())
+            .then_with(|| b.timestamp.cmp(&a.timestamp))
+    });
 
     let latest_song_cloned = candidates[0].clone();
     drop(db);

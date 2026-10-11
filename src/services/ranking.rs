@@ -18,6 +18,11 @@ pub struct SearchHit<'a> {
     pub lyric_hit: Option<LyricHit>,
 }
 
+/// 私库优先的排序键：数值越小越靠前
+const fn source_rank_key(hit: &SearchHit) -> u8 {
+    hit.entry.source.rank()
+}
+
 pub fn merge_and_sort_hits<'a>(
     db: &'a LyricIndexDB,
     metadata_hits: Vec<MetadataHit<'a>>,
@@ -131,7 +136,10 @@ pub fn merge_and_sort_hits<'a>(
         let p_a = get_priority(a);
         let p_b = get_priority(b);
 
-        p_b.cmp(&p_a)
+        // 私库优先：两级排序键 (source_rank, 原有规则)，不许用加分法
+        source_rank_key(a)
+            .cmp(&source_rank_key(b))
+            .then_with(|| p_b.cmp(&p_a))
             .then_with(|| {
                 let r_a = a.lyric_hit.as_ref().map_or(1000.0, |l| l.rank);
                 let r_b = b.lyric_hit.as_ref().map_or(1000.0, |l| l.rank);
@@ -412,5 +420,29 @@ mod tests {
         // 输入全空
         let empty_res = merge_and_sort_hits(&db, vec![], vec![], false);
         assert!(empty_res.is_empty());
+    }
+
+    #[test]
+    fn test_private_entry_sorts_before_public() {
+        use crate::core::models::LyricSource;
+        // e1 私库弱命中，e2 公库强命中：私库必须排前面
+        let mut e1 = make_song("p1.ttml", 1_000, &["Track"], &["Artist"], &[], &[], &[], &[]);
+        e1.source = LyricSource::Private;
+        let e2 = make_song("p2.ttml", 2_000, &["Track"], &["Artist"], &[], &[], &[], &[]);
+        let db = LyricIndexDB::from_entries(vec![e1.clone(), e2.clone()]);
+        let meta_hits = vec![
+            MetadataHit {
+                entry: &db.entries[0],
+                score: MatchType::Low,
+            },
+            MetadataHit {
+                entry: &db.entries[1],
+                score: MatchType::Perfect,
+            },
+        ];
+        let res = merge_and_sort_hits(&db, meta_hits, vec![], false);
+        assert_eq!(res.len(), 2);
+        assert_eq!(res[0].entry.id, e1.id);
+        assert_eq!(res[1].entry.id, e2.id);
     }
 }
