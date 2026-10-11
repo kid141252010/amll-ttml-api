@@ -5,5 +5,4 @@ pub mod lrclib;
 pub mod search;
 pub mod shared;
 pub mod status;
-pub mod ttml_file;
 pub mod webhook;
