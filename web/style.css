@@ -125,7 +125,17 @@ button:not(:disabled):hover { filter: brightness(1.1); }
 }
 
 .detail { margin-top: 10px; cursor: default; }
-.download-btn { margin-top: 8px; }
+
+.info { margin: 0 0 10px; user-select: text; }
+.info-row { display: flex; gap: 8px; font-size: 0.85rem; margin-top: 4px; }
+.info-row dt { flex-shrink: 0; color: var(--dim); min-width: 3em; }
+.info-row dd { margin: 0; word-break: break-word; }
+
+.author-link { color: #7aa2f7; text-decoration: none; }
+.author-link:hover { text-decoration: underline; }
+
+.detail-actions { display: flex; gap: 8px; margin-bottom: 8px; }
+.copy-btn, .download-btn { margin-top: 8px; }
 
 #pagination {
   display: flex;
