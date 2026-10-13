@@ -66,7 +66,10 @@ function renderResults(data) {
   } else {
     resultsEl.innerHTML = items.map(cardHtml).join('');
     for (const el of resultsEl.querySelectorAll('.card')) {
-      el.addEventListener('click', () => toggleDetail(el));
+      el.addEventListener('click', (ev) => {
+        if (ev.target.closest('.detail')) return; // 详情区内点击不收起，方便选中/复制文字
+        toggleDetail(el);
+      });
     }
   }
   const pg = data.pagination || {};
