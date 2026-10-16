@@ -124,6 +124,13 @@ button:not(:disabled):hover { filter: brightness(1.1); }
   overflow: auto;
 }
 
+.snippet mark {
+  background: #f2a0c0;
+  color: #1a1d24;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
 .detail { margin-top: 10px; cursor: default; }
 .download-btn { margin-top: 8px; }
 
