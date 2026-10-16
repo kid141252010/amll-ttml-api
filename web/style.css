@@ -125,8 +125,8 @@ button:not(:disabled):hover { filter: brightness(1.1); }
 }
 
 .snippet mark {
-  background: #f2a0c0;
-  color: #1a1d24;
+  background: rgba(79, 140, 255, 0.35);
+  color: #e6e9ee;
   border-radius: 3px;
   padding: 0 2px;
 }
