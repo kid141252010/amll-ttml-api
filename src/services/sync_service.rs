@@ -51,7 +51,16 @@ use crate::core::{
     models::RawIndexEntry,
 };
 
-const DB_BASE: &str = "https://raw.githubusercontent.com/amll-dev/amll-ttml-db/main";
+const DB_BASE_DEFAULT: &str = "https://raw.githubusercontent.com/amll-dev/amll-ttml-db/main";
+
+/// 上游词库地址，允许用 `AMLL_DB_BASE` 环境变量覆盖（比如走代理/镜像站），未设置时用默认值
+fn db_base() -> String {
+    std::env::var("AMLL_DB_BASE")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DB_BASE_DEFAULT.to_string())
+}
 const INCREMENTAL_THRESHOLD: usize = 500;
 const CONCURRENT_WORKERS: usize = 20;
 const UPSERT_BATCH_SIZE: usize = 500;
@@ -172,7 +181,7 @@ impl SyncService {
     }
 
     async fn fetch_remote_version(&self) -> Result<RemoteVersion> {
-        let url = format!("{DB_BASE}/raw-lyrics/version.json");
+        let url = format!("{}/raw-lyrics/version.json", db_base());
         let resp = self.client.get(&url).send().await?;
         if !resp.status().is_success() {
             anyhow::bail!("Version endpoint returned HTTP {}", resp.status());
@@ -182,7 +191,7 @@ impl SyncService {
     }
 
     async fn fetch_remote_index_map(&self) -> Result<HashMap<String, RawIndexEntry>> {
-        let url = format!("{DB_BASE}/metadata/raw-lyrics-index.jsonl");
+        let url = format!("{}/metadata/raw-lyrics-index.jsonl", db_base());
         info!("Downloading index from: {url}");
 
         let resp = self.client.get(&url).send().await?;
@@ -251,7 +260,7 @@ impl SyncService {
         &self,
         index_map: &HashMap<String, RawIndexEntry>,
     ) -> Result<SyncResult> {
-        let url = format!("{DB_BASE}/raw-lyrics/raw-lyrics.zip");
+        let url = format!("{}/raw-lyrics/raw-lyrics.zip", db_base());
         info!("Downloading full lyrics archive from: {url}");
 
         let mut resp = self
@@ -364,7 +373,7 @@ impl SyncService {
                 let raw_entry_opt = index_map.get(&filename).cloned();
 
                 async move {
-                    let url = format!("{DB_BASE}/raw-lyrics/{filename}");
+                    let url = format!("{}/raw-lyrics/{filename}", db_base());
                     if let Ok(resp) = client.get(&url).send().await
                         && resp.status().is_success()
                         && let Ok(content) = resp.text().await
