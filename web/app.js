@@ -20,6 +20,13 @@ function escapeHtml(s) {
     .replace(/'/g, '&#39;');
 }
 
+// 转义 snippet，但保留后端生成的 <mark> 高亮标签
+function escapeHtmlKeepMark(s) {
+  return escapeHtml(s)
+    .replace(/&lt;mark&gt;/g, '<mark>')
+    .replace(/&lt;\/mark&gt;/g, '</mark>');
+}
+
 function readFormParams() {
   const fd = new FormData(form);
   const p = {};
@@ -95,7 +102,7 @@ function cardHtml(item) {
     '<button type="button" class="download-btn">下载 .ttml</button>' +
     '<button type="button" class="preview-btn">歌词预览</button>' +
     '</div>' +
-    (snippet ? '<pre class="snippet">' + escapeHtml(snippet) + '</pre>' : '') +
+    (snippet ? '<pre class="snippet">' + escapeHtmlKeepMark(snippet) + '</pre>' : '') +
     '<pre class="ttml" hidden></pre>' +
     '</article>';
 }

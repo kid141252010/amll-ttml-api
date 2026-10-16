@@ -143,6 +143,13 @@ button:not(:disabled):hover { filter: brightness(1.1); }
 .preview-btn:hover { color: var(--text); border-color: var(--dim); }
 .preview-btn:disabled { opacity: 0.6; cursor: default; }
 
+.snippet mark {
+  background: rgba(79, 140, 255, 0.35);
+  color: #e6e9ee;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
 #pagination {
   display: flex;
   align-items: center;
