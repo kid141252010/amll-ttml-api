@@ -130,6 +130,16 @@ function infoRows(data) {
   if (names.length) rows.push(['歌名', escapeHtml(names.join(' / '))]);
   if (artists.length) rows.push(['歌手', escapeHtml(artists.join(' / '))]);
   if (albums.length) rows.push(['专辑', escapeHtml(albums.join(' / '))]);
+  [
+    ['网易云音乐 ID', data.ncmMusicIds],
+    ['QQ 音乐 ID', data.qqMusicIds],
+    ['Apple Music ID', data.appleMusicIds],
+    ['Spotify ID', data.spotifyIds],
+    ['ISRC', data.isrcs]
+  ].forEach(function (platform) {
+    const ids = (platform[1] || []).filter(Boolean);
+    if (ids.length) rows.push([platform[0], escapeHtml(ids.join(' / '))]);
+  });
   if (authors.length) {
     rows.push(['制作者', authors.map(function (u) {
       return '<a class="author-link" href="https://github.com/' + encodeURIComponent(u) +

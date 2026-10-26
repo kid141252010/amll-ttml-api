@@ -20,7 +20,7 @@
    - `GET /admin` → `admin.html`
    - 静态资源按路径 serve（`rust-embed` + `mime_guess` 或等价方案）。
    - `/admin` 不从公开页链接（低调处理），**不做服务端鉴权**——真正的鉴权由上传 API 的 Bearer 保证。
-3. **搜索页 `/`**：表单含 q / musicName / artistName / albumName / lyricText（至少填一项，前端校验）；source 下拉（all/public/private，默认 all）；结果卡片展示歌名、歌手、专辑、source 徽标（private 高亮）、匹配片段；点击展开看 TTML 全文（调 get 接口）+ "下载 .ttml" 按钮；pageSize=20，上一页/下一页用 cursor（翻页时保持用户选的 source，避免 cursor+all=400）。
+3. **搜索页 `/`**：表单含 q / musicName / artistName / albumName / lyricText（至少填一项，前端校验）；source 下拉（all/public/private，默认 all）；结果卡片概览直接展示歌名、歌手、专辑、source 徽标（private 高亮）、网易云音乐 ID、QQ 音乐 ID、Apple Music ID、Spotify ID、ISRC、制作者、文件名和匹配片段。平台 ID 使用搜索响应里的元数据，无需点击展开或请求 get 接口；仅展示非空字段，同一平台的多个 ID 用 ` / ` 分隔。信息栏与“复制信息”按钮共用 `infoRows()`，复制结果包含全部平台 ID，制作者以纯文本用户名复制、页面中链接到 GitHub。卡片提供独立的“复制信息”“下载 .ttml”“歌词预览”按钮，只有预览按钮控制 TTML 的展开与收起；点击或选择信息栏文本不会切换预览。下载和首次预览按需调用 get 接口并共享歌词缓存，预览区不重复显示平台 ID。pageSize=20，上一页/下一页用 cursor（翻页时保持用户选的 source，避免 cursor+all=400）。
 4. **管理页 `/admin`**：顶部 ADMIN_SECRET 密码框（只存 sessionStorage，不进 localStorage）；上传表单：文件选择（.ttml）、filename 文本框（默认取所选文件名、可改）；提交 multipart 到 `/api/v1/admin/lyrics`；成功显示 id/filename/source，失败显示服务端错误信息（401 时提示密钥错误）；上传后提供"按文件名搜索确认"快捷按钮。
 5. **前端**：纯 HTML/CSS/JS，不引入框架；fetch 调 `/api/v1/...`；页面中文；移动端可用。
 6. **约束**：不改现有 API 行为；`cargo test` 全过；`cargo clippy --all-targets` 零警告；分支 `feat/webui`（已切好）。
