@@ -72,11 +72,8 @@ function renderResults(data) {
     resultsEl.innerHTML = '<p class="hint">没有找到结果</p>';
   } else {
     resultsEl.innerHTML = items.map(cardHtml).join('');
-    for (const el of resultsEl.querySelectorAll('.card')) {
-      el.addEventListener('click', (ev) => {
-        if (!ev.target.closest('.detail, .platform-ids')) toggleDetail(el);
-      });
-    }
+    const cards = resultsEl.querySelectorAll('.card');
+    cards.forEach(function (el, i) { bindCardActions(el, items[i]); });
   }
   const pg = data.pagination || {};
   const total = pg.total || 0;
@@ -86,78 +83,150 @@ function renderResults(data) {
   nextBtn.disabled = !pg.hasMore;
 }
 
+function infoDl(item) {
+  return '<dl class="info">' + infoRows(item).map(function (r) {
+    return '<div class="info-row"><dt>' + r[0] + '</dt><dd>' + r[1] + '</dd></div>';
+  }).join('') + '</dl>';
+}
+
 function cardHtml(item) {
   const title = (item.musicNames && item.musicNames[0]) || item.filename || ('#' + item.id);
-  const artists = (item.artistNames || []).join(' / ');
-  const albums = (item.albumNames || []).join(' / ');
   const isPrivate = item.source === 'private';
   const snippet = item.matchContext && item.matchContext.snippet;
-  const platformIds = [
-    ['网易云音乐 ID', item.ncmMusicIds],
-    ['QQ 音乐 ID', item.qqMusicIds],
-    ['Apple Music ID', item.appleMusicIds],
-    ['Spotify ID', item.spotifyIds],
-    ['ISRC', item.isrcs]
-  ].filter(([, ids]) => ids && ids.length)
-    .map(([label, ids]) => '<div class="meta dim">' + label + '：' + escapeHtml(ids.join(' / ')) + '</div>')
-    .join('');
   return '<article class="card" data-id="' + escapeHtml(item.id) + '">' +
     '<div class="card-head"><span class="title">' + escapeHtml(title) + '</span>' +
     '<span class="badge' + (isPrivate ? ' private' : '') + '">' + (isPrivate ? '私有' : '公开') + '</span></div>' +
-    (artists ? '<div class="meta">歌手：' + escapeHtml(artists) + '</div>' : '') +
-    (albums ? '<div class="meta">专辑：' + escapeHtml(albums) + '</div>' : '') +
-    '<div class="meta dim">' + escapeHtml(item.filename || '') + '</div>' +
-    (platformIds ? '<div class="platform-ids" aria-label="平台 ID">' + platformIds + '</div>' : '') +
+    infoDl(item) +
+    '<div class="detail-actions">' +
+    '<button type="button" class="copy-btn">复制信息</button>' +
+    '<button type="button" class="download-btn">下载 .ttml</button>' +
+    '<button type="button" class="preview-btn">歌词预览</button>' +
+    '</div>' +
     (snippet ? '<pre class="snippet">' + escapeHtmlKeepMark(snippet) + '</pre>' : '') +
-    '<div class="detail" hidden></div>' +
+    '<pre class="ttml" hidden></pre>' +
     '</article>';
 }
 
-async function toggleDetail(cardEl) {
-  const detailEl = cardEl.querySelector('.detail');
-  const id = cardEl.getAttribute('data-id');
-  if (!detailEl.hidden) {
-    detailEl.hidden = true;
-    detailEl.innerHTML = '';
-    return;
-  }
-  detailEl.hidden = false;
-  if (detailCache.has(id)) {
-    detailEl.innerHTML = detailHtml(detailCache.get(id));
-    bindDownload(detailEl, detailCache.get(id));
-    return;
-  }
-  detailEl.innerHTML = '<p class="hint">加载中…</p>';
-  try {
-    const resp = await fetch('/api/v1/lyrics/get?id=' + encodeURIComponent(id));
-    const json = await resp.json();
-    if (json.status !== 200) throw new Error(json.message || ('status=' + json.status));
-    const data = { lyrics: json.data.lyrics || '', filename: json.data.filename || (id + '.ttml') };
-    detailCache.set(id, data);
-    detailEl.innerHTML = detailHtml(data);
-    bindDownload(detailEl, data);
-  } catch (e) {
-    detailEl.innerHTML = '<p class="error">加载失败：' + escapeHtml(e.message) + '</p>';
-  }
+// 按需拉取歌词原文（下载 / 预览用），带缓存
+async function fetchDetail(id) {
+  if (detailCache.has(id)) return detailCache.get(id);
+  const resp = await fetch('/api/v1/lyrics/get?id=' + encodeURIComponent(id));
+  const json = await resp.json();
+  if (json.status !== 200) throw new Error(json.message || ('status=' + json.status));
+  const data = {
+    lyrics: json.data.lyrics || '',
+    filename: json.data.filename || (id + '.ttml'),
+  };
+  detailCache.set(id, data);
+  return data;
 }
 
-function detailHtml(data) {
-  return '<pre class="ttml"><code>' + escapeHtml(data.lyrics) + '</code></pre>' +
-    '<button type="button" class="download-btn">下载 .ttml</button>';
-}
-
-function bindDownload(detailEl, data) {
-  const btn = detailEl.querySelector('.download-btn');
-  btn.addEventListener('click', (ev) => {
-    ev.stopPropagation();
-    const blob = new Blob([data.lyrics], { type: 'application/xml' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = data.filename;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 100);
+function infoRows(data) {
+  const rows = [];
+  const names = (data.musicNames || []).filter(Boolean);
+  const artists = (data.artistNames || []).filter(Boolean);
+  const albums = (data.albumNames || []).filter(Boolean);
+  const authors = (data.authorUsernames || []).filter(Boolean);
+  if (names.length) rows.push(['歌名', escapeHtml(names.join(' / '))]);
+  if (artists.length) rows.push(['歌手', escapeHtml(artists.join(' / '))]);
+  if (albums.length) rows.push(['专辑', escapeHtml(albums.join(' / '))]);
+  [
+    ['网易云音乐 ID', data.ncmMusicIds],
+    ['QQ 音乐 ID', data.qqMusicIds],
+    ['Apple Music ID', data.appleMusicIds],
+    ['Spotify ID', data.spotifyIds],
+    ['ISRC', data.isrcs]
+  ].forEach(function (platform) {
+    const ids = (platform[1] || []).filter(Boolean);
+    if (ids.length) rows.push([platform[0], escapeHtml(ids.join(' / '))]);
   });
+  if (authors.length) {
+    rows.push(['制作者', authors.map(function (u) {
+      return '<a class="author-link" href="https://github.com/' + encodeURIComponent(u) +
+        '" target="_blank" rel="noopener">' + escapeHtml(u) + '</a>';
+    }).join('、')]);
+  }
+  rows.push(['文件名', escapeHtml(data.filename || '')]);
+  return rows;
+}
+
+function bindCardActions(cardEl, item) {
+  const id = cardEl.getAttribute('data-id');
+  const copyBtn = cardEl.querySelector('.copy-btn');
+  const dlBtn = cardEl.querySelector('.download-btn');
+  const pvBtn = cardEl.querySelector('.preview-btn');
+  const pre = cardEl.querySelector('.ttml');
+
+  copyBtn.addEventListener('click', function () {
+    const lines = infoRows(item).map(function (r) {
+      // 去掉制作者行里的 HTML 标签再复制
+      const tmp = document.createElement('div');
+      tmp.innerHTML = r[1];
+      return r[0] + '：' + tmp.textContent;
+    });
+    const text = lines.join('\n');
+    function done() {
+      copyBtn.textContent = '已复制';
+      setTimeout(function () { copyBtn.textContent = '复制信息'; }, 1500);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(function () { fallbackCopy(text); done(); });
+    } else {
+      fallbackCopy(text);
+      done();
+    }
+  });
+
+  dlBtn.addEventListener('click', async function () {
+    dlBtn.disabled = true;
+    try {
+      const data = await fetchDetail(id);
+      const blob = new Blob([data.lyrics], { type: 'application/xml' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = data.filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 100);
+    } catch (e) {
+      dlBtn.textContent = '下载失败';
+      setTimeout(function () { dlBtn.textContent = '下载 .ttml'; }, 1500);
+    }
+    dlBtn.disabled = false;
+  });
+
+  pvBtn.addEventListener('click', async function () {
+    if (!pre.hidden) {
+      pre.hidden = true;
+      pvBtn.textContent = '歌词预览';
+      return;
+    }
+    if (!pre.dataset.loaded) {
+      pvBtn.disabled = true;
+      pvBtn.textContent = '加载中…';
+      try {
+        const data = await fetchDetail(id);
+        pre.textContent = data.lyrics || '（无歌词内容）';
+        pre.dataset.loaded = '1';
+      } catch (e) {
+        pre.textContent = '加载失败：' + e.message;
+      }
+      pvBtn.disabled = false;
+    }
+    pre.hidden = false;
+    pvBtn.textContent = '收起预览';
+  });
+}
+
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); } catch (e) { /* ignore */ }
+  ta.remove();
 }
 
 form.addEventListener('submit', (ev) => {
