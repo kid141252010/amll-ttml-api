@@ -73,7 +73,9 @@ function renderResults(data) {
   } else {
     resultsEl.innerHTML = items.map(cardHtml).join('');
     for (const el of resultsEl.querySelectorAll('.card')) {
-      el.addEventListener('click', () => toggleDetail(el));
+      el.addEventListener('click', (ev) => {
+        if (!ev.target.closest('.detail, .platform-ids')) toggleDetail(el);
+      });
     }
   }
   const pg = data.pagination || {};
@@ -90,12 +92,22 @@ function cardHtml(item) {
   const albums = (item.albumNames || []).join(' / ');
   const isPrivate = item.source === 'private';
   const snippet = item.matchContext && item.matchContext.snippet;
+  const platformIds = [
+    ['网易云音乐 ID', item.ncmMusicIds],
+    ['QQ 音乐 ID', item.qqMusicIds],
+    ['Apple Music ID', item.appleMusicIds],
+    ['Spotify ID', item.spotifyIds],
+    ['ISRC', item.isrcs]
+  ].filter(([, ids]) => ids && ids.length)
+    .map(([label, ids]) => '<div class="meta dim">' + label + '：' + escapeHtml(ids.join(' / ')) + '</div>')
+    .join('');
   return '<article class="card" data-id="' + escapeHtml(item.id) + '">' +
     '<div class="card-head"><span class="title">' + escapeHtml(title) + '</span>' +
     '<span class="badge' + (isPrivate ? ' private' : '') + '">' + (isPrivate ? '私有' : '公开') + '</span></div>' +
     (artists ? '<div class="meta">歌手：' + escapeHtml(artists) + '</div>' : '') +
     (albums ? '<div class="meta">专辑：' + escapeHtml(albums) + '</div>' : '') +
     '<div class="meta dim">' + escapeHtml(item.filename || '') + '</div>' +
+    (platformIds ? '<div class="platform-ids" aria-label="平台 ID">' + platformIds + '</div>' : '') +
     (snippet ? '<pre class="snippet">' + escapeHtmlKeepMark(snippet) + '</pre>' : '') +
     '<div class="detail" hidden></div>' +
     '</article>';
