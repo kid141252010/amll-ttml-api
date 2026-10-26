@@ -22,6 +22,7 @@ RUN cargo chef cook --release --recipe-path recipe.json
 # 拷贝源码并进行正式构建
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
+COPY web ./web
 
 # 支持从构建参数注入 Git Commit 信息，供 status 端点与日志展示
 ARG GIT_HASH
