@@ -190,4 +190,5 @@ impl LyricStore for DbLyricStore {
 }
 
 #[cfg(test)]
+#[path = "db_lyric_store_tests.rs"]
 mod tests;

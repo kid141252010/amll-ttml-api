@@ -587,4 +587,5 @@ pub fn merge_raw_index_entry(model: &mut entity::Model, raw: RawIndexEntry) {
 }
 
 #[cfg(test)]
+#[path = "sync_service_tests.rs"]
 mod tests;

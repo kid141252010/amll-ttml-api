@@ -148,4 +148,5 @@ where
 }
 
 #[cfg(test)]
+#[path = "pagination_tests.rs"]
 mod tests;

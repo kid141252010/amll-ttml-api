@@ -139,4 +139,5 @@ fn remove(path: &Path) -> io::Result<()> {
 }
 
 #[cfg(test)]
+#[path = "retention_tests.rs"]
 mod tests;

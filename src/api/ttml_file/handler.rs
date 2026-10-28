@@ -78,4 +78,5 @@ pub async fn handle_ttml_file(
 }
 
 #[cfg(test)]
+#[path = "handler_tests.rs"]
 mod tests;

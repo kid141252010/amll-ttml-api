@@ -218,4 +218,5 @@ pub async fn search_fts(
 }
 
 #[cfg(test)]
+#[path = "queries_tests.rs"]
 mod tests;

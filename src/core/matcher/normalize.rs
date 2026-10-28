@@ -31,4 +31,5 @@ pub fn normalize_name_for_comparison(name: &str) -> String {
 }
 
 #[cfg(test)]
+#[path = "normalize_tests.rs"]
 mod tests;

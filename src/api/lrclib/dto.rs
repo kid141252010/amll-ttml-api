@@ -58,4 +58,5 @@ pub fn map_to_lrclib_item(
 }
 
 #[cfg(test)]
+#[path = "dto_tests.rs"]
 mod tests;

@@ -23,4 +23,5 @@ pub fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
 }
 
 #[cfg(test)]
+#[path = "string_tests.rs"]
 mod tests;

@@ -226,4 +226,5 @@ pub struct LyricSearchResult {
 }
 
 #[cfg(test)]
+#[path = "models_tests.rs"]
 mod tests;

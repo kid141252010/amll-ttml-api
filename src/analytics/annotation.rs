@@ -224,4 +224,5 @@ fn normalized_query(query: &SearchQuery) -> Option<String> {
 }
 
 #[cfg(test)]
+#[path = "annotation_tests.rs"]
 mod tests;

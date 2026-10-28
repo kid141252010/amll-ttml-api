@@ -128,4 +128,5 @@ fn verify_webhook_auth(headers: &HeaderMap, body: &[u8], secret: &str) -> bool {
 }
 
 #[cfg(test)]
+#[path = "handler_tests.rs"]
 mod tests;

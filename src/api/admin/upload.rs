@@ -256,4 +256,5 @@ fn no_store(mut response: Response) -> Response {
 }
 
 #[cfg(test)]
+#[path = "upload_tests.rs"]
 mod tests;

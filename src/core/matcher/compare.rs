@@ -216,4 +216,5 @@ pub fn compare_artists<S1: AsRef<str>, S2: AsRef<str>>(
 }
 
 #[cfg(test)]
+#[path = "compare_tests.rs"]
 mod tests;

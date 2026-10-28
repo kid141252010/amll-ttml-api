@@ -143,4 +143,5 @@ pub async fn apply(req: Request, next: Next) -> Response {
 }
 
 #[cfg(test)]
+#[path = "etag_tests.rs"]
 mod tests;

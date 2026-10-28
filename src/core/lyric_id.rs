@@ -111,4 +111,5 @@ impl FromStr for LyricId {
 }
 
 #[cfg(test)]
+#[path = "lyric_id_tests.rs"]
 mod tests;

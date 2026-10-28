@@ -156,4 +156,5 @@ pub fn merge_and_sort_hits<'a>(
 }
 
 #[cfg(test)]
+#[path = "ranking_tests.rs"]
 mod tests;

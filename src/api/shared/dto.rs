@@ -217,4 +217,5 @@ pub fn map_song_to_item(
 }
 
 #[cfg(test)]
+#[path = "dto_tests.rs"]
 mod tests;

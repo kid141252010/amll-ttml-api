@@ -206,4 +206,5 @@ fn score_global_keyword(q_norm: &str, entry: &SongEntry) -> MatchType {
 }
 
 #[cfg(test)]
+#[path = "score_tests.rs"]
 mod tests;

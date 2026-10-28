@@ -38,4 +38,5 @@ pub fn parse_file_name(name: &str) -> Option<NaiveDate> {
 }
 
 #[cfg(test)]
+#[path = "day_tests.rs"]
 mod tests;

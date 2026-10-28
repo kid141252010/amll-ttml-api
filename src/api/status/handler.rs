@@ -62,4 +62,5 @@ pub async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 #[cfg(test)]
+#[path = "handler_tests.rs"]
 mod tests;

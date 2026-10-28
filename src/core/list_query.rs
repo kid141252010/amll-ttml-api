@@ -193,4 +193,5 @@ pub struct ListQuery {
 }
 
 #[cfg(test)]
+#[path = "list_query_tests.rs"]
 mod tests;

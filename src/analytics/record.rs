@@ -292,4 +292,5 @@ fn response_bytes(response: &Response) -> Option<i64> {
 }
 
 #[cfg(test)]
+#[path = "record_tests.rs"]
 mod tests;

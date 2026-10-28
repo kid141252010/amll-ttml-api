@@ -212,4 +212,5 @@ async fn convert_day(
 }
 
 #[cfg(test)]
+#[path = "convert_tests.rs"]
 mod tests;

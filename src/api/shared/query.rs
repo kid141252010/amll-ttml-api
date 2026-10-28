@@ -507,4 +507,5 @@ pub fn parse_get_query(query_str: &str) -> Result<GetQuery, AppError> {
 }
 
 #[cfg(test)]
+#[path = "query_tests.rs"]
 mod tests;

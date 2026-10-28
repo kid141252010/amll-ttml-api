@@ -333,4 +333,5 @@ pub async fn lrclib_get_by_id<R: LyricStore>(
 }
 
 #[cfg(test)]
+#[path = "lyric_service_tests.rs"]
 mod tests;

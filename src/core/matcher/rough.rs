@@ -97,4 +97,5 @@ pub fn rough_match(prepared: &PreparedQuery, entry: &SongEntry) -> bool {
 }
 
 #[cfg(test)]
+#[path = "rough_tests.rs"]
 mod tests;

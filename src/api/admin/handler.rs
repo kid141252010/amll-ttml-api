@@ -151,4 +151,5 @@ fn no_store(mut response: Response) -> Response {
 }
 
 #[cfg(test)]
+#[path = "handler_tests.rs"]
 mod tests;

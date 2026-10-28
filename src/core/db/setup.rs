@@ -133,4 +133,5 @@ pub async fn init_db(db_url: &str) -> Result<DatabaseConnection, DbErr> {
 }
 
 #[cfg(test)]
+#[path = "setup_tests.rs"]
 mod tests;

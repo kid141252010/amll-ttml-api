@@ -93,4 +93,5 @@ fn format_lrc_timestamp(ms: u32) -> String {
 }
 
 #[cfg(test)]
+#[path = "ttml_tests.rs"]
 mod tests;

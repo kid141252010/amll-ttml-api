@@ -67,4 +67,5 @@ pub fn highlight_keyword(text: &str, keyword: &str) -> String {
 }
 
 #[cfg(test)]
+#[path = "highlight_tests.rs"]
 mod tests;
