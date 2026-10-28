@@ -39,6 +39,10 @@ use tracing::{
     info,
     warn,
 };
+use ttml_processor::model::{
+    PlatformId,
+    TTMLMetadata,
+};
 use zip::read::ZipArchive;
 
 use crate::core::{
@@ -583,6 +587,32 @@ pub fn merge_raw_index_entry(model: &mut entity::Model, raw: RawIndexEntry) {
     }
     if !author_usernames.is_empty() {
         model.author_usernames = serde_json::to_value(author_usernames).unwrap_or_default();
+    }
+}
+
+/// 从 TTML 元数据合并平台 ID 和 ISRC，去重并保留原始顺序
+pub fn merge_ttml_platform_ids(model: &mut entity::Model, metadata: &TTMLMetadata) {
+    let merge_ids = |field: &mut serde_json::Value, values: &[String]| {
+        if !values.is_empty() {
+            let mut seen = HashSet::new();
+            let ids: Vec<_> = values.iter().filter(|id| seen.insert(*id)).collect();
+            *field = serde_json::to_value(ids).unwrap_or_default();
+        }
+    };
+
+    if let Some(platform_ids) = &metadata.platform_ids {
+        for (platform, ids) in platform_ids {
+            let field = match platform {
+                PlatformId::NcmMusicId => &mut model.ncm_music_ids,
+                PlatformId::QqMusicId => &mut model.qq_music_ids,
+                PlatformId::AppleMusicId => &mut model.apple_music_ids,
+                PlatformId::SpotifyId => &mut model.spotify_ids,
+            };
+            merge_ids(field, ids);
+        }
+    }
+    if let Some(isrcs) = &metadata.isrc {
+        merge_ids(&mut model.isrcs, isrcs);
     }
 }
 

@@ -44,7 +44,10 @@ use crate::{
     },
     services::{
         AppState,
-        sync_service::build_entity_from_ttml,
+        sync_service::{
+            build_entity_from_ttml,
+            merge_ttml_platform_ids,
+        },
     },
 };
 
@@ -149,6 +152,7 @@ async fn upsert_private_lyric(
     })?;
 
     let mut model = build_entity_from_ttml(filename, content, &result);
+    merge_ttml_platform_ids(&mut model, &result.metadata);
     model.source = "private".to_string();
     model.id = LyricId::from_private_filename(filename).get().cast_signed();
 

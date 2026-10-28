@@ -71,6 +71,65 @@ fn test_merge_raw_index_entry_binds_all_platform_ids() {
     assert_eq!(model.isrcs, json!(["US123"]));
 }
 
+#[test]
+fn test_merge_ttml_platform_ids_binds_and_deduplicates_all_ids() {
+    let ttml = r#"<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="00:01.000" end="00:02.000">Text</p></div></body></tt>"#;
+    let parsed = ttml_processor::parse_ttml(ttml).expect("parse ttml");
+    let mut model = build_entity_from_ttml("1689087424000-999-abc.ttml", ttml, &parsed);
+    let metadata = TTMLMetadata {
+        platform_ids: Some(
+            [
+                (PlatformId::NcmMusicId, ["1002", "1001", "1002"]),
+                (PlatformId::QqMusicId, ["002def", "001abc", "002def"]),
+                (PlatformId::AppleMusicId, ["am456", "am123", "am456"]),
+                (PlatformId::SpotifyId, ["sp1002", "sp1001", "sp1002"]),
+            ]
+            .into_iter()
+            .map(|(platform, ids)| (platform, ids.into_iter().map(str::to_string).collect()))
+            .collect(),
+        ),
+        isrc: Some(vec![
+            "US456".to_string(),
+            "US123".to_string(),
+            "US456".to_string(),
+        ]),
+        ..Default::default()
+    };
+    let empty_lists = TTMLMetadata {
+        platform_ids: metadata
+            .platform_ids
+            .as_ref()
+            .map(|ids| ids.keys().map(|key| (key.clone(), Vec::new())).collect()),
+        isrc: Some(Vec::new()),
+        ..Default::default()
+    };
+
+    for metadata in [&metadata, &TTMLMetadata::default(), &empty_lists] {
+        merge_ttml_platform_ids(&mut model, metadata);
+
+        assert_eq!(model.ncm_music_ids, json!(["1002", "1001"]));
+        assert_eq!(model.qq_music_ids, json!(["002def", "001abc"]));
+        assert_eq!(model.apple_music_ids, json!(["am456", "am123"]));
+        assert_eq!(model.spotify_ids, json!(["sp1002", "sp1001"]));
+        assert_eq!(model.isrcs, json!(["US456", "US123"]));
+    }
+}
+
+#[test]
+fn test_merge_ttml_platform_ids_empty_metadata_keeps_empty_ids() {
+    let ttml = r#"<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="00:01.000" end="00:02.000">Text</p></div></body></tt>"#;
+    let parsed = ttml_processor::parse_ttml(ttml).expect("parse ttml");
+    let mut model = build_entity_from_ttml("1689087424000-999-abc.ttml", ttml, &parsed);
+
+    merge_ttml_platform_ids(&mut model, &parsed.metadata);
+
+    assert_eq!(model.ncm_music_ids, json!([]));
+    assert_eq!(model.qq_music_ids, json!([]));
+    assert_eq!(model.apple_music_ids, json!([]));
+    assert_eq!(model.spotify_ids, json!([]));
+    assert_eq!(model.isrcs, json!([]));
+}
+
 #[tokio::test]
 async fn public_upsert_never_overwrites_private_row() {
     use crate::core::db::setup::init_db;
