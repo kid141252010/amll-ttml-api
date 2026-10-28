@@ -194,6 +194,11 @@ fn split_route(path: &str, matched: Option<&str>) -> (Option<&'static str>, Opti
         .into_iter()
         .find(|prefix| strip_prefix(path, prefix).is_some());
 
+    // 根级 TTML 模板会兜住 API 前缀下的未知路径，应按未匹配记录
+    if prefix.is_some() && matched == Some("/{platform}/{file}") {
+        return (prefix, None);
+    }
+
     let route = matched.map(|matched| {
         prefix
             .and_then(|prefix| strip_prefix(matched, prefix))

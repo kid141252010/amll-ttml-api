@@ -34,6 +34,26 @@ fn split_route_keeps_prefix_for_unmatched_paths() {
 }
 
 #[test]
+fn split_route_distinguishes_ttml_links_from_api_paths() {
+    assert_eq!(
+        split_route("/v1/does-not-exist", Some("/{platform}/{file}")),
+        (Some("/v1"), None)
+    );
+    assert_eq!(
+        split_route("/api/v1/does-not-exist", Some("/{platform}/{file}")),
+        (Some("/api/v1"), None)
+    );
+    assert_eq!(
+        split_route("/ncm-lyrics/123.ttml", Some("/{platform}/{file}")),
+        (None, Some("/{platform}/{file}".to_string()))
+    );
+    assert_eq!(
+        split_route("/v1/lrclib/get/42", Some("/v1/lrclib/get/{id}")),
+        (Some("/v1"), Some("/lrclib/get/{id}".to_string()))
+    );
+}
+
+#[test]
 fn params_json_decodes_and_collects_repeated_keys() {
     let json = params_json("musicName=%E6%99%B4%E5%A4%A9&ncmMusicId=1&ncmMusicId=2&x=").unwrap();
     let value: Value = serde_json::from_str(&json).unwrap();
