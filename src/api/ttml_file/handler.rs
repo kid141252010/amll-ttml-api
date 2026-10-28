@@ -6,14 +6,23 @@
 //! 私库优先，直接返回 TTML 原文。
 
 use axum::{
-    extract::{Path, State},
+    extract::{
+        Path,
+        State,
+    },
     http::header,
     response::IntoResponse,
 };
 
 use crate::{
-    core::{error::AppError, models::IdQuery},
-    services::{AppState, lyric_service},
+    core::{
+        error::AppError,
+        models::IdQuery,
+    },
+    services::{
+        AppState,
+        lyric_service,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

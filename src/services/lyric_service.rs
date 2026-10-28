@@ -487,16 +487,8 @@ mod tests {
     #[tokio::test]
     async fn list_lyrics_private_first_and_source_filter() {
         // 私库条目时间戳更旧，但默认排序下必须排在公库前面
-        let mut private_entry = make_song(
-            "mine.ttml",
-            1_000,
-            &["Mine"],
-            &["Me"],
-            &[],
-            &[],
-            &[],
-            &[],
-        );
+        let mut private_entry =
+            make_song("mine.ttml", 1_000, &["Mine"], &["Me"], &[], &[], &[], &[]);
         private_entry.source = LyricSource::Private;
         let public_entry = make_song(
             "theirs.ttml",
@@ -509,13 +501,19 @@ mod tests {
             &[],
         );
         let store = MemoryLyricStore {
-            db: Arc::new(LyricIndexDB::from_entries(vec![public_entry, private_entry])),
+            db: Arc::new(LyricIndexDB::from_entries(vec![
+                public_entry,
+                private_entry,
+            ])),
             ..MemoryLyricStore::default()
         };
 
         let res = list_lyrics(&store, default_list_query()).await;
         assert_eq!(
-            res.items.iter().map(|e| e.filename.as_str()).collect::<Vec<_>>(),
+            res.items
+                .iter()
+                .map(|e| e.filename.as_str())
+                .collect::<Vec<_>>(),
             ["mine.ttml", "theirs.ttml"]
         );
 

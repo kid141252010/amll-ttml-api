@@ -707,10 +707,7 @@ mod tests {
             Some(LyricSource::Public)
         );
         // all 等价于不传
-        assert_eq!(
-            parse_list_query("source=all").unwrap().filter.source,
-            None
-        );
+        assert_eq!(parse_list_query("source=all").unwrap().filter.source, None);
         assert_eq!(parse_list_query("").unwrap().filter.source, None);
 
         let result = parse_list_query("source=bogus");
@@ -908,7 +905,8 @@ mod tests {
 
     #[test]
     fn list_query_parses_before_as_cursor_alias() {
-        let query = parse_list_query("before=1768754400682_699269132670751&source=private").unwrap();
+        let query =
+            parse_list_query("before=1768754400682_699269132670751&source=private").unwrap();
         let cursor = query.cursor.unwrap();
         assert_eq!(cursor.timestamp, 1_768_754_400_682);
         assert_eq!(cursor.id.get(), 699_269_132_670_751);

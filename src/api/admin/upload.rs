@@ -54,7 +54,11 @@ pub async fn handle_upload_lyric(
     headers: HeaderMap,
     multipart: Multipart,
 ) -> Response {
-    no_store(upload_lyric(&state, headers, multipart).await.into_response())
+    no_store(
+        upload_lyric(&state, headers, multipart)
+            .await
+            .into_response(),
+    )
 }
 
 #[derive(Serialize)]
@@ -82,12 +86,10 @@ async fn upload_lyric(
     {
         match field.name() {
             Some("filename") => {
-                filename_raw = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| AppError::BadRequest(format!("Invalid filename field: {e}")))?,
-                );
+                filename_raw =
+                    Some(field.text().await.map_err(|e| {
+                        AppError::BadRequest(format!("Invalid filename field: {e}"))
+                    })?);
             }
             Some("file") => {
                 file_bytes = Some(
@@ -196,7 +198,9 @@ async fn upsert_private_lyric(
 fn validate_filename(raw: &str) -> Result<String, AppError> {
     let name = raw.trim();
     if name.is_empty() {
-        return Err(AppError::BadRequest("filename must not be empty".to_string()));
+        return Err(AppError::BadRequest(
+            "filename must not be empty".to_string(),
+        ));
     }
     if name.len() > 255 {
         return Err(AppError::BadRequest(
@@ -284,10 +288,7 @@ mod tests {
             "a\\b.ttml",
             &"x".repeat(300),
         ] {
-            assert!(
-                validate_filename(bad).is_err(),
-                "should reject {bad:?}"
-            );
+            assert!(validate_filename(bad).is_err(), "should reject {bad:?}");
         }
     }
 

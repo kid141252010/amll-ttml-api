@@ -142,9 +142,9 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use super::{
-        migrate_source_column,
         CREATE_LYRICS_TABLE_SQL,
         init_db,
+        migrate_source_column,
     };
     use crate::core::db::entity;
 

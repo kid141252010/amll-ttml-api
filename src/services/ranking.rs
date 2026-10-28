@@ -426,9 +426,27 @@ mod tests {
     fn test_private_entry_sorts_before_public() {
         use crate::core::models::LyricSource;
         // e1 私库弱命中，e2 公库强命中：私库必须排前面
-        let mut e1 = make_song("p1.ttml", 1_000, &["Track"], &["Artist"], &[], &[], &[], &[]);
+        let mut e1 = make_song(
+            "p1.ttml",
+            1_000,
+            &["Track"],
+            &["Artist"],
+            &[],
+            &[],
+            &[],
+            &[],
+        );
         e1.source = LyricSource::Private;
-        let e2 = make_song("p2.ttml", 2_000, &["Track"], &["Artist"], &[], &[], &[], &[]);
+        let e2 = make_song(
+            "p2.ttml",
+            2_000,
+            &["Track"],
+            &["Artist"],
+            &[],
+            &[],
+            &[],
+            &[],
+        );
         let db = LyricIndexDB::from_entries(vec![e1.clone(), e2.clone()]);
         let meta_hits = vec![
             MetadataHit {

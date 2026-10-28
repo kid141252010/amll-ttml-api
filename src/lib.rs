@@ -74,7 +74,10 @@ pub fn create_app(state: AppState) -> Router {
             "/admin/analytics/files/{name}",
             get(api::admin::handler::handle_download_file),
         )
-        .route("/admin/lyrics", post(api::admin::upload::handle_upload_lyric));
+        .route(
+            "/admin/lyrics",
+            post(api::admin::upload::handle_upload_lyric),
+        );
 
     let trace_layer =
         TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO));

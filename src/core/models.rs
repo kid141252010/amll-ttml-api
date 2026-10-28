@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use compact_str::CompactString;
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize,
+    Serialize,
+};
 
 use crate::core::{
     LyricId,

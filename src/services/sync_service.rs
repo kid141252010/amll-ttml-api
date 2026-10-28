@@ -667,7 +667,9 @@ mod tests {
 
         let conn = init_db("sqlite::memory:").await.expect("init db");
         let private_model = entity::ActiveModel {
-            id: Set(LyricId::from_private_filename("shared.ttml").get().cast_signed()),
+            id: Set(LyricId::from_private_filename("shared.ttml")
+                .get()
+                .cast_signed()),
             filename: Set("shared.ttml".to_string()),
             timestamp: Set(1),
             source: Set("private".to_string()),
@@ -704,7 +706,9 @@ mod tests {
 
         // 私库行未被覆盖
         let row = entity::Entity::find_by_id(
-            LyricId::from_private_filename("shared.ttml").get().cast_signed(),
+            LyricId::from_private_filename("shared.ttml")
+                .get()
+                .cast_signed(),
         )
         .one(&conn)
         .await
