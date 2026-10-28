@@ -76,8 +76,18 @@ pub async fn search_lyric<R: LyricStore>(
     let db = store.load_index().await;
     let metadata_hits = db.search_by_fields(query);
 
-    let lyric_hits =
+    let mut lyric_hits =
         fetch_lyric_hits_if_needed(store, query, &metadata_hits, fts_window(pagination)).await;
+
+    // FTS 不认识来源，按索引里的条目补一道过滤，否则 source=private 时公库条目会经正文命中漏进来。
+    // 索引里查不到的命中无从判断来源，一并剔除
+    if let Some(source) = query.source {
+        lyric_hits.retain(|hit| {
+            db.id_idx
+                .get(&hit.id)
+                .is_some_and(|&idx| db.entries[idx].source == source)
+        });
+    }
 
     let sorted_hits =
         merge_and_sort_hits(&db, metadata_hits, lyric_hits, query.lyric_text.is_some());

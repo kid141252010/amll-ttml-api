@@ -18,6 +18,51 @@ fn native_search_empty_string_params_returns_error() {
 }
 
 #[test]
+fn search_source_parsing() {
+    for (raw, expected) in [
+        ("private", Some(LyricSource::Private)),
+        ("PUBLIC", Some(LyricSource::Public)),
+        ("+PrIvAtE+", Some(LyricSource::Private)),
+        ("all", None),
+    ] {
+        let (query, _) =
+            parse_search_query(&format!("q=x&source={raw}"), &NATIVE_SEARCH_DIALECT).unwrap();
+        assert_eq!(query.source, expected);
+        assert_eq!(query.global_keyword.as_deref(), Some("x"));
+
+        let exact = parse_search_query_exact(
+            &format!("track_name=x&artist_name=y&source={raw}"),
+            &LRCLIB_GET_DIALECT,
+        )
+        .unwrap();
+        assert_eq!(exact.source, expected);
+    }
+}
+
+#[test]
+fn search_invalid_source_returns_bad_request() {
+    let results = [
+        parse_search_query("q=x&source=bogus", &NATIVE_SEARCH_DIALECT).map(|(query, _)| query),
+        parse_search_query_exact(
+            "track_name=x&artist_name=y&source=bogus",
+            &LRCLIB_GET_DIALECT,
+        ),
+    ];
+    for result in results {
+        assert!(matches!(result, Err(AppError::BadRequest(msg)) if msg ==
+            "'source' must be one of 'private', 'public', 'all', got 'bogus'."));
+    }
+}
+
+#[test]
+fn search_source_only_still_requires_keywords() {
+    assert!(matches!(
+        parse_search_query("source=private", &NATIVE_SEARCH_DIALECT),
+        Err(AppError::BadRequest(msg)) if msg == "Missing valid search parameters."
+    ));
+}
+
+#[test]
 fn native_search_q_only() {
     let (query, pagination) = parse_search_query("q=Taylor+Swift", &NATIVE_SEARCH_DIALECT).unwrap();
     assert_eq!(query.global_keyword.as_deref(), Some("Taylor Swift"));
@@ -64,6 +109,40 @@ fn native_search_empty_value_skipped() {
     let (query, _) = parse_search_query("musicName=&q=hello", &NATIVE_SEARCH_DIALECT).unwrap();
     assert_eq!(query.global_keyword.as_deref(), Some("hello"));
     assert!(query.track_name.is_none());
+}
+
+#[test]
+fn native_search_source_param() {
+    let (query, _) = parse_search_query("q=x&source=private", &NATIVE_SEARCH_DIALECT).unwrap();
+    assert_eq!(query.source, Some(LyricSource::Private));
+
+    let (query, _) = parse_search_query("q=x&source=PUBLIC", &NATIVE_SEARCH_DIALECT).unwrap();
+    assert_eq!(query.source, Some(LyricSource::Public));
+
+    // all 与未传等价
+    let (query, _) = parse_search_query("q=x&source=all", &NATIVE_SEARCH_DIALECT).unwrap();
+    assert_eq!(query.source, None);
+    let (query, _) = parse_search_query("q=x", &NATIVE_SEARCH_DIALECT).unwrap();
+    assert_eq!(query.source, None);
+}
+
+#[test]
+fn native_search_invalid_source_returns_error() {
+    let result = parse_search_query("q=x&source=bogus", &NATIVE_SEARCH_DIALECT);
+    assert!(matches!(
+        result,
+        Err(AppError::BadRequest(ref msg))
+            if msg == "'source' must be one of 'private', 'public', 'all', got 'bogus'."
+    ));
+}
+
+#[test]
+fn native_search_source_alone_is_not_a_search_param() {
+    let result = parse_search_query("source=private", &NATIVE_SEARCH_DIALECT);
+    assert!(matches!(
+        result,
+        Err(AppError::BadRequest(ref msg)) if msg == "Missing valid search parameters."
+    ));
 }
 
 #[test]
@@ -563,6 +642,21 @@ fn lrclib_get_valid_params_success() {
         parse_search_query_exact("track_name=ME!&artist_name=Taylor", &LRCLIB_GET_DIALECT).unwrap();
     assert_eq!(result.track_name.as_deref(), Some("ME!"));
     assert_eq!(result.artist_name.as_deref(), Some("Taylor"));
+}
+
+#[test]
+fn exact_source_search_keeps_lrc_lib_query_shape() {
+    let query = parse_search_query_exact(
+        "track_name=ME!&artist_name=Taylor&album_name=Lover&q=ignored&source=private",
+        &LRCLIB_GET_DIALECT,
+    )
+    .unwrap();
+
+    assert_eq!(query.source, Some(LyricSource::Private));
+    assert_eq!(query.track_name.as_deref(), Some("ME!"));
+    assert_eq!(query.artist_name.as_deref(), Some("Taylor"));
+    assert_eq!(query.album_name.as_deref(), Some("Lover"));
+    assert!(query.global_keyword.is_none());
 }
 
 // --- Get ID 测试组 ---

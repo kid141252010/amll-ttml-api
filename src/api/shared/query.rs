@@ -86,7 +86,7 @@ pub fn parse_search_query(
     query_str: &str,
     dialect: &SearchDialect,
 ) -> Result<(SearchQuery, Pagination), AppError> {
-    let parsed = parse_query_internal(query_str, dialect);
+    let mut parsed = parse_query_internal(query_str, dialect);
 
     if !parsed.has_any_param {
         return Err(AppError::BadRequest(
@@ -94,6 +94,7 @@ pub fn parse_search_query(
         ));
     }
 
+    parsed.query.source = parse_source(parsed.source_raw.as_deref())?;
     let pagination =
         Pagination::from_raw(parsed.page_raw.as_deref(), parsed.page_size_raw.as_deref())?;
     Ok((parsed.query, pagination))
@@ -103,7 +104,7 @@ pub fn parse_search_query_exact(
     query_str: &str,
     dialect: &SearchDialect,
 ) -> Result<SearchQuery, AppError> {
-    let parsed = parse_query_internal(query_str, dialect);
+    let mut parsed = parse_query_internal(query_str, dialect);
 
     if let SearchRequirement::ExactRequired(reqs) = dialect.requirement {
         for req in reqs {
@@ -124,7 +125,25 @@ pub fn parse_search_query_exact(
         }
     }
 
+    parsed.query.source = parse_source(parsed.source_raw.as_deref())?;
     Ok(parsed.query)
+}
+
+/// 解析检索端点的 `source` 参数，取值与报错文案和 `/v1/lyrics/list` 一致
+///
+/// `all` 与未传等价，都返回 `None`（不过滤）
+fn parse_source(raw: Option<&str>) -> Result<Option<LyricSource>, AppError> {
+    raw.map(str::trim).map_or_else(
+        || Ok(None),
+        |s| match s.to_lowercase().as_str() {
+            "private" => Ok(Some(LyricSource::Private)),
+            "public" => Ok(Some(LyricSource::Public)),
+            "all" => Ok(None),
+            _ => Err(AppError::BadRequest(format!(
+                "'source' must be one of 'private', 'public', 'all', got '{s}'."
+            ))),
+        },
+    )
 }
 
 /// `/v1/lyrics/list` 的 `hasId` / `missingId` 取值映射
@@ -346,6 +365,8 @@ struct ParsedQueryParams {
     pub has_any_param: bool,
     pub page_raw: Option<String>,
     pub page_size_raw: Option<String>,
+    /// `source` 原始值，校验留给调用方（本函数不返回 `Result`）
+    pub source_raw: Option<String>,
 }
 
 fn parse_query_internal(query_str: &str, dialect: &SearchDialect) -> ParsedQueryParams {
@@ -355,6 +376,7 @@ fn parse_query_internal(query_str: &str, dialect: &SearchDialect) -> ParsedQuery
 
     let mut page_raw: Option<String> = None;
     let mut page_size_raw: Option<String> = None;
+    let mut source_raw: Option<String> = None;
 
     for (k, v) in form_urlencoded::parse(query_str.as_bytes()) {
         let val = v.replace('\0', " ");
@@ -370,6 +392,11 @@ fn parse_query_internal(query_str: &str, dialect: &SearchDialect) -> ParsedQuery
         }
         if key_str == "pageSize" {
             page_size_raw = Some(val);
+            continue;
+        }
+        // source 只是过滤条件，不计入 has_any_param
+        if key_str == "source" {
+            source_raw = Some(val);
             continue;
         }
 
@@ -424,6 +451,7 @@ fn parse_query_internal(query_str: &str, dialect: &SearchDialect) -> ParsedQuery
         has_any_param,
         page_raw,
         page_size_raw,
+        source_raw,
     }
 }
 
