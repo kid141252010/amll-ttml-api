@@ -142,7 +142,8 @@ fn song_id() -> i64 {
 #[expect(clippy::too_many_lines)]
 async fn records_http_fields_and_business_annotations() {
     let dir = tempfile::tempdir().unwrap();
-    let config = AnalyticsConfig::new(dir.path().to_owned(), Some(b"test-key".to_vec()), 3000);
+    let mut config = AnalyticsConfig::new(dir.path().to_owned(), Some(b"test-key".to_vec()), 3000);
+    config.min_free_bytes = 0;
     let instance = config.instance.clone();
     let (app, tasks) = app_with_analytics(config).await;
 
@@ -290,8 +291,9 @@ async fn records_http_fields_and_business_annotations() {
 #[tokio::test]
 async fn missing_ip_key_keeps_recording_without_client_id() {
     let dir = tempfile::tempdir().unwrap();
-    let (app, tasks) =
-        app_with_analytics(AnalyticsConfig::new(dir.path().to_owned(), None, 3000)).await;
+    let mut config = AnalyticsConfig::new(dir.path().to_owned(), None, 3000);
+    config.min_free_bytes = 0;
+    let (app, tasks) = app_with_analytics(config).await;
 
     send(
         &app,
