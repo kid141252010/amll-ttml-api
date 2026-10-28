@@ -19,10 +19,10 @@
 
       <div>
         <label for="file">TTML 文件</label>
-        <input type="file" id="file" accept=".ttml">
+        <input type="file" id="file" accept=".ttml" multiple>
       </div>
 
-      <div>
+      <div id="filename-field">
         <label for="filename">文件名</label>
         <input type="text" id="filename" placeholder="选择文件后自动填入，可修改">
       </div>
@@ -38,6 +38,7 @@
   const secretInput = document.getElementById('admin-secret');
   const fileInput = document.getElementById('file');
   const filenameInput = document.getElementById('filename');
+  const filenameField = document.getElementById('filename-field');
   const resultEl = document.getElementById('upload-result');
   const uploadBtn = document.getElementById('upload-btn');
 
@@ -48,6 +49,9 @@
   });
 
   fileInput.addEventListener('change', () => {
+    const isBatch = fileInput.files.length > 1;
+    filenameField.hidden = isBatch;
+    filenameInput.disabled = isBatch;
     const f = fileInput.files[0];
     if (f && !filenameInput.value) filenameInput.value = f.name;
   });
@@ -62,20 +66,21 @@
   document.getElementById('upload-form').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const secret = secretInput.value.trim();
-    const file = fileInput.files[0];
+    const files = Array.from(fileInput.files);
+    const isBatch = files.length > 1;
     const filename = filenameInput.value.trim();
     if (!secret) { resultEl.innerHTML = '<p class="error">请先填写 ADMIN_SECRET</p>'; return; }
-    if (!file) { resultEl.innerHTML = '<p class="error">请选择 .ttml 文件</p>'; return; }
-    if (!filename) { resultEl.innerHTML = '<p class="error">请填写文件名</p>'; return; }
+    if (!files.length) { resultEl.innerHTML = '<p class="error">请选择 .ttml 文件</p>'; return; }
+    if (!isBatch && !filename) { resultEl.innerHTML = '<p class="error">请填写文件名</p>'; return; }
 
     const fd = new FormData();
-    fd.append('filename', filename);
-    fd.append('file', file, file.name);
+    if (!isBatch) fd.append('filename', filename);
+    files.forEach(file => fd.append('file', file, file.name));
 
     uploadBtn.disabled = true;
     resultEl.innerHTML = '<p class="hint">上传中…</p>';
     try {
-      const resp = await fetch('/api/v1/admin/lyrics', {
+      const resp = await fetch(isBatch ? '/api/v1/admin/lyrics/batch' : '/api/v1/admin/lyrics', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + secret },
         body: fd,
@@ -91,6 +96,14 @@
         return;
       }
       const d = json.data;
+      if (isBatch) {
+        resultEl.innerHTML = '<p>成功 ' + escapeHtml(d.succeeded) + '，失败 ' + escapeHtml(d.failed) + '</p>' +
+          d.results.map(item => item.error === null
+            ? '<p>成功：' + escapeHtml(item.filename) + '（id：' + escapeHtml(item.id) + '）</p>'
+            : '<p class="error">失败：' + escapeHtml(item.filename) + '（' + escapeHtml(item.error) + '）</p>'
+          ).join('');
+        return;
+      }
       const searchUrl = '/?q=' + encodeURIComponent(d.filename);
       resultEl.innerHTML =
         '<div class="card"><div class="card-head"><span class="title">上传成功</span>' +

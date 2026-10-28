@@ -1,4 +1,4 @@
-//! 私人歌词库上传接口：`POST /v1/admin/lyrics`
+//! 私人歌词库上传接口：`POST /v1/admin/lyrics` 及 `/v1/admin/lyrics/batch`
 //!
 //! 内部接口，不写进公开接口文档。用 `ADMIN_SECRET` 做 Bearer 鉴权；所有响应（含错误）
 //! 一律 `no-store`，带着 token 的内容不该留在任何缓存里
@@ -7,6 +7,7 @@ use axum::{
     extract::{
         Multipart,
         State,
+        multipart::MultipartRejection,
     },
     http::{
         HeaderMap,
@@ -61,12 +62,144 @@ pub async fn handle_upload_lyric(
     )
 }
 
+/// `POST /v1/admin/lyrics/batch`：顺序上传多首私库歌词，全部处理后统一重建索引
+pub async fn handle_upload_lyrics_batch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    multipart: Result<Multipart, MultipartRejection>,
+) -> Response {
+    no_store(
+        upload_lyrics_batch(&state, &headers, multipart)
+            .await
+            .into_response(),
+    )
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadLyricData {
     pub id: u64,
     pub filename: String,
     pub source: &'static str,
+}
+
+const MAX_BATCH_FILES: usize = 100;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadLyricsBatchData {
+    succeeded: usize,
+    failed: usize,
+    results: Vec<UploadLyricResult>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadLyricResult {
+    filename: String,
+    id: Option<u64>,
+    error: Option<String>,
+}
+
+async fn upload_lyrics_batch(
+    state: &AppState,
+    headers: &HeaderMap,
+    multipart: Result<Multipart, MultipartRejection>,
+) -> Result<ApiSuccess<UploadLyricsBatchData>, AppError> {
+    authorize_admin(state, headers)?;
+    let mut multipart =
+        multipart.map_err(|e| AppError::BadRequest(format!("Invalid multipart body: {e}")))?;
+    let mut files = Vec::new();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("Invalid multipart body: {e}")))?
+    {
+        if field.name() != Some("file") {
+            continue;
+        }
+        if files.len() == MAX_BATCH_FILES {
+            return Err(AppError::BadRequest(format!(
+                "Too many files (max {MAX_BATCH_FILES})"
+            )));
+        }
+        let filename = field.file_name().unwrap_or_default().to_string();
+        let bytes = field
+            .bytes()
+            .await
+            .map_err(|e| AppError::BadRequest(format!("Invalid file field: {e}")))?;
+        files.push((filename, bytes.to_vec()));
+    }
+
+    process_batch_upload(state, files).await.map(ApiSuccess)
+}
+
+/// 先检查整批数量再写库，单个文件失败不影响后续文件
+async fn process_batch_upload(
+    state: &AppState,
+    files: Vec<(String, Vec<u8>)>,
+) -> Result<UploadLyricsBatchData, AppError> {
+    if files.is_empty() {
+        return Err(AppError::BadRequest("Missing 'file' field".to_string()));
+    }
+    if files.len() > MAX_BATCH_FILES {
+        return Err(AppError::BadRequest(format!(
+            "Too many files (max {MAX_BATCH_FILES})"
+        )));
+    }
+
+    let mut succeeded = 0;
+    let mut results = Vec::with_capacity(files.len());
+    for (filename, bytes) in files {
+        let result = async {
+            let filename = validate_filename(&filename)?;
+            let content = std::str::from_utf8(&bytes)
+                .map_err(|_| AppError::BadRequest("file is not valid UTF-8".to_string()))?;
+            upsert_private_lyric(&state.store.conn, &filename, content).await
+        }
+        .await;
+
+        let (id, error) = match result {
+            Ok(id) => {
+                succeeded += 1;
+                (Some(id.get()), None)
+            }
+            Err(error) => {
+                let message = match error {
+                    AppError::BadRequest(message) | AppError::InternalServerError(message) => {
+                        message
+                    }
+                    _ => "Failed to save lyric".to_string(),
+                };
+                (None, Some(message))
+            }
+        };
+        results.push(UploadLyricResult {
+            filename,
+            id,
+            error,
+        });
+    }
+
+    // 整批写完后只重建一次；全部失败时保留现有索引与热缓存
+    if succeeded > 0 {
+        match state.store.rebuild_index().await {
+            Ok(()) => state.store.invalidate_caches(),
+            Err(e) => {
+                error!("batch upload index rebuild failed: {e:?}");
+                return Err(AppError::InternalServerError(
+                    "Lyric saved but index rebuild failed".to_string(),
+                ));
+            }
+        }
+    }
+
+    Ok(UploadLyricsBatchData {
+        succeeded,
+        failed: results.len() - succeeded,
+        results,
+    })
 }
 
 async fn upload_lyric(
