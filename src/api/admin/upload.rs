@@ -14,13 +14,7 @@ use axum::{
         State,
         multipart::MultipartRejection,
     },
-    http::{
-        HeaderMap,
-        header::{
-            AUTHORIZATION,
-            CACHE_CONTROL,
-        },
-    },
+    http::HeaderMap,
     response::{
         IntoResponse,
         Response,
@@ -33,16 +27,14 @@ use sea_orm::{
     SqlErr,
 };
 use serde::Serialize;
-use sha2::{
-    Digest,
-    Sha256,
-};
-use subtle::ConstantTimeEq;
 use tracing::error;
 
 use crate::{
     api::shared::{
-        cache::NO_STORE_CACHE_CONTROL,
+        auth::{
+            authorize_bearer,
+            no_store,
+        },
         dto::ApiSuccess,
         query::has_ttml_extension,
     },
@@ -64,10 +56,10 @@ use crate::{
 pub async fn handle_upload_lyric(
     State(state): State<AppState>,
     headers: HeaderMap,
-    multipart: Multipart,
+    multipart: Result<Multipart, MultipartRejection>,
 ) -> Response {
     no_store(
-        upload_lyric(&state, headers, multipart)
+        upload_lyric(&state, &headers, multipart)
             .await
             .into_response(),
     )
@@ -219,10 +211,12 @@ async fn process_batch_upload(
 
 async fn upload_lyric(
     state: &AppState,
-    headers: HeaderMap,
-    mut multipart: Multipart,
+    headers: &HeaderMap,
+    multipart: Result<Multipart, MultipartRejection>,
 ) -> Result<ApiSuccess<UploadLyricData>, AppError> {
-    authorize_admin(state, &headers)?;
+    authorize_admin(state, headers)?;
+    let mut multipart =
+        multipart.map_err(|e| AppError::BadRequest(format!("Invalid multipart body: {e}")))?;
 
     let mut filename_raw: Option<String> = None;
     let mut file_bytes: Option<Vec<u8>> = None;
@@ -417,37 +411,7 @@ fn now_millis() -> i64 {
 
 /// 未配置密钥是服务端配置错误；Bearer 缺失或不匹配是 401
 fn authorize_admin(state: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
-    let secret = state.admin_secret.as_ref().ok_or_else(|| {
-        AppError::InternalServerError(
-            "ADMIN_SECRET environment variable is not configured on the server.".to_string(),
-        )
-    })?;
-
-    let provided = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .ok_or(AppError::Unauthorized)?;
-
-    if token_matches(provided, secret.as_str()) {
-        Ok(())
-    } else {
-        Err(AppError::Unauthorized)
-    }
-}
-
-/// 常量时间比较。先各自取哈希，长度差异也不会从耗时上泄露
-fn token_matches(provided: &str, expected: &str) -> bool {
-    let provided = Sha256::digest(provided.as_bytes());
-    let expected = Sha256::digest(expected.as_bytes());
-    provided.as_slice().ct_eq(expected.as_slice()).into()
-}
-
-fn no_store(mut response: Response) -> Response {
-    response
-        .headers_mut()
-        .insert(CACHE_CONTROL, NO_STORE_CACHE_CONTROL);
-    response
+    authorize_bearer(headers, state.admin_secret.as_deref(), "ADMIN_SECRET")
 }
 
 #[cfg(test)]

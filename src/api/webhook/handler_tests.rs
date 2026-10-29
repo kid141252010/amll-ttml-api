@@ -194,3 +194,54 @@ async fn test_webhook_sync_rejects_tls_early_data() {
     let res = handle_webhook_sync(headers, State(state), Bytes::new()).await;
     assert!(res.is_ok());
 }
+
+#[derive(Clone, Default)]
+struct CapturedLogs(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for CapturedLogs {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// GitHub push payload 含推送者邮箱，只允许 event / ref / after 这类定位字段进日志
+#[tokio::test]
+async fn test_webhook_sync_log_omits_payload_details() {
+    let db_conn = init_db("sqlite::memory:").await.unwrap();
+    let secret = "github_webhook_secret_key";
+    let state = AppState::new_with_secret(db_conn, Some(secret));
+
+    let payload = Bytes::from_static(
+        br#"{"ref":"refs/heads/main","after":"abc123","pusher":{"name":"someone","email":"someone@example.com"}}"#,
+    );
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "X-Hub-Signature-256",
+        compute_github_signature(secret, &payload).parse().unwrap(),
+    );
+    headers.insert("X-GitHub-Event", "push".parse().unwrap());
+
+    let logs = CapturedLogs::default();
+    let writer = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || writer.clone())
+        .with_ansi(false)
+        .finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+    let res = handle_webhook_sync(headers, State(state), payload).await;
+    drop(guard);
+    assert!(res.is_ok());
+
+    let output = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    assert!(output.contains("Webhook sync triggered"), "{output}");
+    assert!(output.contains("event=push"), "{output}");
+    assert!(output.contains("refs/heads/main"), "{output}");
+    assert!(output.contains("abc123"), "{output}");
+    assert!(!output.contains("someone@example.com"), "{output}");
+    assert!(!output.contains("pusher"), "{output}");
+}

@@ -1,4 +1,27 @@
+use axum::{
+    body::{
+        Body,
+        to_bytes,
+    },
+    http::{
+        Request,
+        StatusCode,
+    },
+};
+use sea_orm::EntityTrait;
+use tower::ServiceExt;
+
 use super::*;
+use crate::{
+    core::db::{
+        entity,
+        setup::init_db,
+    },
+    create_app,
+    services::sync_service::build_entity_from_ttml,
+};
+
+const SCRIPT_TTML: &str = r#"<tt xmlns="http://www.w3.org/ns/ttml" xmlns:h="http://www.w3.org/1999/xhtml"><head><h:script>alert(1)</h:script></head><body><div><p begin="00:01.000" end="00:02.000">hello</p></div></body></tt>"#;
 
 #[test]
 fn resolves_supported_platforms() {
@@ -197,4 +220,40 @@ mod route {
         let json: serde_json::Value = serde_json::from_str(&body).expect("json");
         assert_eq!(json["message"], "Unsupported platform: 'kugou'.");
     }
+}
+
+#[tokio::test]
+async fn ttml_file_response_is_sandboxed_without_changing_body() {
+    let conn = init_db("sqlite::memory:").await.expect("init db");
+    let parsed = ttml_processor::parse_ttml(SCRIPT_TTML).expect("sample ttml");
+    let mut model = build_entity_from_ttml("script.ttml", SCRIPT_TTML, &parsed);
+    model.ncm_music_ids = serde_json::json!(["4242"]);
+    entity::Entity::insert(entity::ActiveModel::from(model))
+        .exec(&conn)
+        .await
+        .expect("seed row");
+    let state = AppState::new_with_secret(conn, None);
+    state.store.rebuild_index().await.expect("rebuild index");
+
+    let response = create_app(state)
+        .oneshot(
+            Request::get("/ncm-lyrics/4242.ttml")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers();
+    assert_eq!(
+        headers[header::CONTENT_TYPE],
+        "application/xml; charset=utf-8"
+    );
+    assert_eq!(headers[header::CONTENT_SECURITY_POLICY], "sandbox");
+    assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    assert_eq!(body, SCRIPT_TTML.as_bytes());
 }
