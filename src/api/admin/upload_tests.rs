@@ -30,7 +30,18 @@ use crate::{
     create_app,
 };
 
-const SAMPLE_TTML: &str = r#"<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="00:00:01.000" end="00:00:02.000">hello</p></div></body></tt>"#;
+const SAMPLE_TTML: &str = r#"<tt xmlns="http://www.w3.org/ns/ttml" xmlns:amll="http://www.example.com/ns/amll">
+        <head><metadata>
+            <amll:meta key="appleMusicId" value="1540793097"/>
+            <amll:meta key="appleMusicId" value="1540793098"/>
+            <amll:meta key="appleMusicId" value="1540793097"/>
+            <amll:meta key="spotifyId" value="sp1001"/>
+            <amll:meta key="ncmMusicId" value="1001"/>
+            <amll:meta key="qqMusicId" value="001abc"/>
+            <amll:meta key="isrc" value="US123"/>
+        </metadata></head>
+        <body><div><p begin="00:00:01.000" end="00:00:02.000">hello</p></div></body>
+    </tt>"#;
 
 #[test]
 fn validate_filename_accepts_ttml() {
@@ -117,6 +128,14 @@ async fn upsert_private_lyric_round_trip() {
         .expect("query")
         .expect("row exists");
     assert!(row.lyric_text.contains("hello updated"));
+    assert_eq!(
+        row.apple_music_ids,
+        serde_json::json!(["1540793097", "1540793098"])
+    );
+    assert_eq!(row.spotify_ids, serde_json::json!(["sp1001"]));
+    assert_eq!(row.ncm_music_ids, serde_json::json!(["1001"]));
+    assert_eq!(row.qq_music_ids, serde_json::json!(["001abc"]));
+    assert_eq!(row.isrcs, serde_json::json!(["US123"]));
 }
 
 async fn batch_state() -> AppState {

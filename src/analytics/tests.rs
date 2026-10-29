@@ -190,7 +190,7 @@ async fn records_http_fields_and_business_annotations() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 
     // 5：未匹配到路由
-    let (status, _) = send(&app, get("/v1/does-not-exist")).await;
+    let (status, _) = send(&app, get("/v1/does-not-exist/extra")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
     // 6：CORS 预检
@@ -273,7 +273,10 @@ async fn records_http_fields_and_business_annotations() {
     let unmatched = &rows[5];
     assert_eq!(unmatched.prefix.as_deref(), Some("/v1"));
     assert_eq!(unmatched.route, None);
-    assert_eq!(unmatched.raw_path.as_deref(), Some("/v1/does-not-exist"));
+    assert_eq!(
+        unmatched.raw_path.as_deref(),
+        Some("/v1/does-not-exist/extra")
+    );
     assert_eq!(unmatched.hit_count, None);
 
     let preflight = &rows[6];
