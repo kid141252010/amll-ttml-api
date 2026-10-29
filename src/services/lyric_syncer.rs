@@ -14,7 +14,11 @@
 //!
 //! 索引是 SQLite 的派生视图，重建失败时保留旧索引继续服务，与库的落差最迟在下一次同步收敛。
 
-use std::sync::Arc;
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+};
 
 use tokio::sync::Mutex;
 use tracing::{
@@ -28,24 +32,48 @@ use crate::{
     services::{
         db_lyric_store::DbLyricStore,
         sync_service::{
+            SyncResult,
             SyncService,
             SyncStatus,
         },
     },
 };
 
+type SyncFuture = Pin<Box<dyn Future<Output = anyhow::Result<SyncResult>> + Send>>;
+
+/// 「从远端写入 SQLite」这一步，参数是 `force`
+///
+/// 生产实现是 [`SyncService::sync`]；抽成可注入的函数，测试可以换成不出网的假实现
+type SyncRunner = Arc<dyn Fn(bool) -> SyncFuture + Send + Sync>;
+
 #[derive(Clone)]
 pub struct LyricSyncer {
     store: DbLyricStore,
     lock: Arc<Mutex<()>>,
+    runner: SyncRunner,
 }
 
 impl LyricSyncer {
     #[must_use]
     pub fn new(store: DbLyricStore) -> Self {
+        let conn = store.conn.clone();
+        let client = store.client.clone();
+        Self::with_runner(store, move |force| {
+            let syncer = SyncService::new(conn.clone(), client.clone());
+            Box::pin(async move { syncer.sync(force).await })
+        })
+    }
+
+    /// 用自定义的同步步骤构造，锁、索引重建与缓存失效的编排逻辑不变
+    #[must_use]
+    pub fn with_runner(
+        store: DbLyricStore,
+        runner: impl Fn(bool) -> SyncFuture + Send + Sync + 'static,
+    ) -> Self {
         Self {
             store,
             lock: Arc::new(Mutex::new(())),
+            runner: Arc::new(runner),
         }
     }
 
@@ -64,8 +92,7 @@ impl LyricSyncer {
         };
 
         info!(force, "Running database sync service...");
-        let syncer = SyncService::new(self.store.conn.clone(), self.store.client.clone());
-        match syncer.sync(force).await {
+        match (self.runner)(force).await {
             Ok(res) => {
                 info!("Sync completed with status: {:?}", res.status);
                 if res.status == SyncStatus::Updated {
@@ -90,3 +117,7 @@ impl LyricSyncer {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "lyric_syncer_tests.rs"]
+mod tests;

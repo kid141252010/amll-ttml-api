@@ -34,11 +34,17 @@ use crate::{
     },
 };
 
+/// 远程兜底层的歌词目录，后面直接拼文件名
+const RAW_LYRICS_BASE: &str =
+    "https://raw.githubusercontent.com/amll-dev/amll-ttml-db/main/raw-lyrics";
+
 #[derive(Clone)]
 pub struct DbLyricStore {
     pub index: Arc<ArcSwap<LyricIndexDB>>,
     pub conn: DatabaseConnection,
     pub client: Client,
+    /// 远程兜底层的歌词目录，生产恒为 [`RAW_LYRICS_BASE`]，测试可换成本地服务
+    remote_base: Arc<str>,
     pub ttml_cache: Cache<String, String>,
     pub formatted_lyric_cache: Cache<String, TTMLFormatResult>,
 }
@@ -67,9 +73,18 @@ impl DbLyricStore {
             index: Arc::new(ArcSwap::from_pointee(LyricIndexDB::default())),
             conn,
             client,
+            remote_base: Arc::from(RAW_LYRICS_BASE),
             ttml_cache,
             formatted_lyric_cache,
         }
+    }
+
+    /// 替换远程兜底层的歌词目录（测试用，避免真出网）
+    #[cfg(test)]
+    #[must_use]
+    pub fn with_remote_base(mut self, base: &str) -> Self {
+        self.remote_base = Arc::from(base);
+        self
     }
 
     /// 当前索引条目数
@@ -118,7 +133,7 @@ impl DbLyricStore {
             return Ok(ttml);
         }
 
-        let text = fetch_raw_lyric(&self.client, filename).await?;
+        let text = fetch_raw_lyric(&self.client, &self.remote_base, filename).await?;
         self.ttml_cache
             .insert(filename.to_string(), text.clone())
             .await;
@@ -163,10 +178,8 @@ impl DbLyricStore {
 /// 从 GitHub 根据指定文件名下载歌词内容
 ///
 /// 只有在缓存和本地数据库都不存在时才应使用
-async fn fetch_raw_lyric(client: &Client, filename: &str) -> Result<String, AppError> {
-    let ttml_url = format!(
-        "https://raw.githubusercontent.com/amll-dev/amll-ttml-db/main/raw-lyrics/{filename}"
-    );
+async fn fetch_raw_lyric(client: &Client, base: &str, filename: &str) -> Result<String, AppError> {
+    let ttml_url = format!("{base}/{filename}");
 
     let res = client.get(&ttml_url).send().await?;
     if !res.status().is_success() {
