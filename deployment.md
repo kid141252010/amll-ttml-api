@@ -155,6 +155,17 @@ EOF'
 
 为什么要分两档：API 响应（JSON / TTML）不该被浏览器当成页面执行任何东西，所以用 `default-src 'none'` 加 `sandbox` 锁死；而 `/`、`/admin` 是要真正运行的页面，严格策略会拦掉 `/app.js`、`/style.css`、admin 页的内嵌脚本和对 `/api/v1/` 的 `fetch`，`sandbox` 还会把页面放进不透明源，admin 页读 `sessionStorage` 直接抛 `SecurityError`。WebUI 这一档依据 `web/` 的实际需求定：全部资源同源，`admin.html` 有一段内嵌 `<script>`（所以 `script-src` 需要 `'unsafe-inline'`），没有内联样式、图片、字体或第三方资源，作者链接与 TTML 下载（Blob URL）属于导航，不受这些指令约束。改动 `web/` 引入新的资源类型时要同步放宽这里。
 
+再创建 `/etc/nginx/conf.d/amll_ratelimit.conf`，定义站点配置里 `limit_req zone=apilimit` 引用的限流区（`limit_req_zone` 同样只能写在 http 级，理由同上；缺了它 `nginx -t` 会报 `zero size shared memory zone "apilimit"`）：
+
+```bash
+sudo bash -c 'cat <<EOF > /etc/nginx/conf.d/amll_ratelimit.conf
+# 按客户端 IP 限流：10m 共享内存约可容纳 16 万个 IP 的状态
+limit_req_zone \$binary_remote_addr zone=apilimit:10m rate=10r/s;
+EOF'
+```
+
+`rate=10r/s` 配合站点里的 `burst=50 nodelay`，意味着单个 IP 可瞬时突发 50 个请求，之后按每秒 10 个持续放行；可按实际流量与客户端行为调整这两个值。
+
 ### 4.2 创建 Nginx 站点配置
 创建 `/etc/nginx/sites-available/amll-ttml-api` 并软链接至 `sites-enabled`：
 
