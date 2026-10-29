@@ -451,6 +451,58 @@ fn search_by_artist_name() {
 }
 
 #[test]
+fn search_by_fields_filters_source() {
+    use crate::core::models::LyricSource;
+
+    let mut public = make_song(
+        "public.ttml",
+        100,
+        &["Same Song"],
+        &[],
+        &[],
+        &[],
+        &["111"],
+        &[],
+    );
+    public.source = LyricSource::Public;
+    let mut private = make_song(
+        "private.ttml",
+        200,
+        &["Same Song"],
+        &[],
+        &[],
+        &[],
+        &["111"],
+        &[],
+    );
+    private.source = LyricSource::Private;
+    let db = LyricIndexDB::from_entries(vec![public, private]);
+
+    // 同时覆盖普通候选、作者与文本组合、仅作者精确匹配三个分支。
+    for (track_name, author_id) in [
+        (Some("Same Song"), None),
+        (Some("Same Song"), Some("111")),
+        (None, Some("111")),
+    ] {
+        for (source, filenames) in [
+            (Some(LyricSource::Private), vec!["private.ttml"]),
+            (Some(LyricSource::Public), vec!["public.ttml"]),
+            (None, vec!["private.ttml", "public.ttml"]),
+        ] {
+            let query = SearchQuery {
+                track_name: track_name.map(str::to_owned),
+                author_id: author_id.map(str::to_owned),
+                source,
+                ..Default::default()
+            };
+            let hits = db.search_by_fields(&query);
+            let actual: Vec<_> = hits.iter().map(|hit| hit.entry.filename.as_str()).collect();
+            assert_eq!(actual, filenames);
+        }
+    }
+}
+
+#[test]
 fn search_by_author_id_exact() {
     let db = LyricIndexDB::from_entries(vec![
         make_song(
@@ -922,4 +974,85 @@ fn find_by_ids_filename_hits_private_first() {
     };
     let result = db.find_by_ids(&query);
     assert_eq!(result, vec![0]);
+}
+
+// --- search_by_fields source 过滤 ---
+
+fn source_fixture() -> LyricIndexDB {
+    use crate::core::models::LyricSource;
+    let pub_entry = make_song(
+        "pub.ttml",
+        1,
+        &["Same Song"],
+        &["A"],
+        &[],
+        &[],
+        &["u1"],
+        &[],
+    );
+    let mut priv_entry = make_song(
+        "priv.ttml",
+        2,
+        &["Same Song"],
+        &["A"],
+        &[],
+        &[],
+        &["u1"],
+        &[],
+    );
+    priv_entry.source = LyricSource::Private;
+    priv_entry.id = LyricId::from_private_filename("priv.ttml");
+    LyricIndexDB::from_entries(vec![pub_entry, priv_entry])
+}
+
+fn searched_names(db: &LyricIndexDB, query: &SearchQuery) -> Vec<String> {
+    let mut names: Vec<String> = db
+        .search_by_fields(query)
+        .iter()
+        .map(|hit| hit.entry.filename.to_string())
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+#[test]
+fn search_by_fields_filters_by_source() {
+    use crate::core::models::LyricSource;
+    let db = source_fixture();
+    let query = |source| SearchQuery {
+        track_name: Some("Same Song".to_string()),
+        source,
+        ..Default::default()
+    };
+
+    assert_eq!(
+        searched_names(&db, &query(Some(LyricSource::Private))),
+        ["priv.ttml"]
+    );
+    assert_eq!(
+        searched_names(&db, &query(Some(LyricSource::Public))),
+        ["pub.ttml"]
+    );
+    assert_eq!(searched_names(&db, &query(None)), ["priv.ttml", "pub.ttml"]);
+}
+
+#[test]
+fn search_by_fields_author_branch_filters_by_source() {
+    use crate::core::models::LyricSource;
+    let db = source_fixture();
+    let query = |source| SearchQuery {
+        author_id: Some("u1".to_string()),
+        source,
+        ..Default::default()
+    };
+
+    assert_eq!(
+        searched_names(&db, &query(Some(LyricSource::Private))),
+        ["priv.ttml"]
+    );
+    assert_eq!(
+        searched_names(&db, &query(Some(LyricSource::Public))),
+        ["pub.ttml"]
+    );
+    assert_eq!(searched_names(&db, &query(None)), ["priv.ttml", "pub.ttml"]);
 }

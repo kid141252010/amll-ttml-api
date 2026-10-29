@@ -127,6 +127,15 @@ impl LyricIndexDB {
                 (0..self.entries.len()).collect()
             };
 
+        // 按来源过滤，作者精确匹配与普通分支统一在这里生效
+        let candidates: Vec<usize> = match query.source {
+            Some(source) => candidates
+                .into_iter()
+                .filter(|&idx| self.entries[idx].source == source)
+                .collect(),
+            None => candidates,
+        };
+
         // 仅 author 过滤无文本字段时，候选集已是精确匹配结果，直接按时间戳降序返回
         if !prepared.has_text_fields() {
             let mut result: Vec<MetadataHit<'_>> = candidates

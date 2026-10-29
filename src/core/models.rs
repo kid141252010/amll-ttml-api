@@ -202,6 +202,9 @@ pub struct SearchQuery {
 
     pub author_id: Option<String>,
     pub author_username: Option<String>,
+
+    /// 来源过滤：`None` 表示公私库都要（`source=all` 或未传）
+    pub source: Option<LyricSource>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

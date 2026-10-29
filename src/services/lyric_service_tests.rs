@@ -731,6 +731,41 @@ async fn search_lyric_metadata_hit() {
 }
 
 #[tokio::test]
+async fn search_lyric_filters_fts_hits_by_source() {
+    let (mut store, public_id, private_id) = create_test_store();
+    let mut entries = store.db.entries.clone();
+    entries
+        .iter_mut()
+        .find(|entry| entry.id == private_id)
+        .unwrap()
+        .source = LyricSource::Private;
+    store.db = Arc::new(LyricIndexDB::from_entries(entries));
+    store.fts_results.get_mut("Hello").unwrap().push(LyricHit {
+        id: private_id,
+        rank: 0.2,
+        field: LyricMatchField::MainLyric,
+        snippet: Some("Hello private lyric".to_string()),
+    });
+
+    for (source, expected_ids) in [
+        (Some(LyricSource::Private), vec![private_id]),
+        (Some(LyricSource::Public), vec![public_id]),
+        (None, vec![public_id, private_id]),
+    ] {
+        let query = SearchQuery {
+            lyric_text: Some("Hello".to_string()),
+            source,
+            ..Default::default()
+        };
+        let res = search_lyric(&store, &query, default_pagination()).await;
+        assert_eq!(res.items.len(), expected_ids.len());
+        for id in expected_ids {
+            assert!(res.items.iter().any(|hit| hit.entry.id == id));
+        }
+    }
+}
+
+#[tokio::test]
 async fn search_lyric_fts_hit_carries_lyric_hit() {
     let (store, id1, _) = create_test_store();
     let query = SearchQuery {
