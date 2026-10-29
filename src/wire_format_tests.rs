@@ -446,6 +446,149 @@ async fn lyrics_list_cursor_rejects_conflicts_and_bad_inputs() {
     }
 }
 
+// --- /lyrics/search?source= 路由级：过滤与 total 作用在完整命中集上 ---
+
+const CROWD_PUBLIC: usize = 160;
+const MINE_PRIVATE: usize = 2;
+
+/// 160 条公库 + 2 条私库，正文都含 `needle`
+///
+/// 公库词频高、文本短，bm25 全部排在私库前面；旧实现的 FTS 窗口在默认第 1 页只有
+/// 50 × 3 = 150 条，私库命中落在窗口外
+async fn crowded_search_app() -> Router {
+    let db_conn = init_db("sqlite::memory:").await.expect("init in-memory db");
+
+    let crowd_ttml = r#"<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="00:01.000" end="00:02.000">needle needle needle</p></div></body></tt>"#;
+    let mine_ttml = format!(
+        r#"<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="00:01.000" end="00:02.000">needle</p><p begin="00:02.000" end="00:03.000">{}</p></div></body></tt>"#,
+        "filler words here ".repeat(60)
+    );
+
+    let mut models = Vec::new();
+    for i in 0..CROWD_PUBLIC {
+        let filename = format!("crowd_{i:03}.ttml");
+        let parsed = ttml_processor::parse_ttml(crowd_ttml).expect("crowd ttml must parse");
+        let mut model = build_entity_from_ttml(&filename, crowd_ttml, &parsed);
+        model.author_ids = serde_json::json!(["crowd"]);
+        models.push(model);
+    }
+    for i in 0..MINE_PRIVATE {
+        let filename = format!("mine_{i}.ttml");
+        let parsed = ttml_processor::parse_ttml(&mine_ttml).expect("private ttml must parse");
+        let mut model = build_entity_from_ttml(&filename, &mine_ttml, &parsed);
+        model.id = LyricId::from_private_filename(&filename)
+            .get()
+            .cast_signed();
+        model.source = "private".to_string();
+        model.author_ids = serde_json::json!(["me"]);
+        models.push(model);
+    }
+    for model in models {
+        entity::Entity::insert(model.into_active_model())
+            .exec(&db_conn)
+            .await
+            .expect("seed entity row");
+    }
+
+    let state = AppState::new_with_secret(db_conn, None);
+    state.store.rebuild_index().await.expect("rebuild index");
+    create_app(state)
+}
+
+/// 取出 `(各条目的 source, total, hasMore)`，并断言每条都带高亮 snippet
+async fn search_sources(app: &Router, uri: &str) -> (Vec<String>, u64, bool) {
+    let (status, body) = get_body(app, uri).await;
+    assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).expect("json body");
+    let data = &json["data"];
+    let sources = data["items"]
+        .as_array()
+        .expect("items array")
+        .iter()
+        .map(|item| {
+            assert!(
+                item["matchContext"]["snippet"]
+                    .as_str()
+                    .is_some_and(|s| s.contains("<mark>needle</mark>")),
+                "{uri}: item without snippet: {item}"
+            );
+            item["source"].as_str().expect("source").to_owned()
+        })
+        .collect();
+    let total = data["pagination"]["total"].as_u64().expect("total");
+    let has_more = data["pagination"]["hasMore"].as_bool().expect("hasMore");
+    (sources, total, has_more)
+}
+
+#[tokio::test]
+async fn lyrics_search_source_private_returns_every_private_lyric_hit() {
+    let app = crowded_search_app().await;
+
+    let (sources, total, has_more) =
+        search_sources(&app, "/v1/lyrics/search?lyricText=needle&source=private").await;
+    assert_eq!(total, MINE_PRIVATE as u64);
+    assert_eq!(sources, ["private"; MINE_PRIVATE]);
+    assert!(!has_more);
+}
+
+#[tokio::test]
+async fn lyrics_search_source_public_excludes_private_lyric_hits() {
+    let app = crowded_search_app().await;
+
+    let (sources, total, has_more) =
+        search_sources(&app, "/v1/lyrics/search?lyricText=needle&source=public").await;
+    assert_eq!(total, CROWD_PUBLIC as u64);
+    assert_eq!(sources.len(), 50);
+    assert!(sources.iter().all(|s| s == "public"));
+    assert!(has_more);
+
+    // 最后一页可达且只剩余数
+    let (sources, _, has_more) = search_sources(
+        &app,
+        "/v1/lyrics/search?lyricText=needle&source=public&page=4",
+    )
+    .await;
+    assert_eq!(sources.len(), CROWD_PUBLIC - 150);
+    assert!(!has_more);
+}
+
+#[tokio::test]
+async fn lyrics_search_source_all_reports_true_total_with_private_first() {
+    let app = crowded_search_app().await;
+
+    for uri in [
+        "/v1/lyrics/search?lyricText=needle&source=all",
+        "/v1/lyrics/search?lyricText=needle",
+    ] {
+        let (sources, total, has_more) = search_sources(&app, uri).await;
+        assert_eq!(total, (CROWD_PUBLIC + MINE_PRIVATE) as u64, "{uri}");
+        assert_eq!(sources[..MINE_PRIVATE], ["private"; MINE_PRIVATE], "{uri}");
+        assert!(sources[MINE_PRIVATE..].iter().all(|s| s == "public"));
+        assert!(has_more);
+    }
+}
+
+#[tokio::test]
+async fn lyrics_search_source_combines_with_author_id_and_rejects_bad_value() {
+    let app = crowded_search_app().await;
+
+    let (sources, total, _) =
+        search_sources(&app, "/v1/lyrics/search?lyricText=needle&authorId=me").await;
+    assert_eq!(total, MINE_PRIVATE as u64);
+    assert_eq!(sources, ["private"; MINE_PRIVATE]);
+
+    let (sources, total, _) = search_sources(
+        &app,
+        "/v1/lyrics/search?lyricText=needle&authorId=me&source=public",
+    )
+    .await;
+    assert_eq!(total, 0);
+    assert!(sources.is_empty());
+
+    let (status, _) = get_body(&app, "/v1/lyrics/search?lyricText=needle&source=mine").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
 #[tokio::test]
 async fn lyrics_get_not_found_error_shape() {
     let app = test_app().await;

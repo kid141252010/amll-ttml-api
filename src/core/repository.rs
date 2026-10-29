@@ -102,30 +102,29 @@ impl LyricIndexDB {
         let prepared = PreparedQuery::from_search_query(query);
 
         // 如果传了歌词作者 ID 和用户名，直接精确匹配再模糊打分
-        let candidates: Vec<usize> =
-            if prepared.author_id.is_some() || prepared.author_username.is_some() {
-                let author_id_set = prepared.author_id.as_ref().and_then(|id| {
-                    self.author_id_idx
-                        .get(id.as_str())
-                        .map(|v| v.iter().copied().collect::<HashSet<usize>>())
-                });
-                let author_username_set = prepared.author_username.as_ref().and_then(|username| {
-                    self.author_username_idx
-                        .get(username.as_str())
-                        .map(|v| v.iter().copied().collect::<HashSet<usize>>())
-                });
+        //
+        // 与 `list_candidates` 同一写法：`Option` 的 `Some` / `None` 只由参数有没有传决定，
+        // 索引里查不到的作者是空候选，两个作者参数同时传时 AND 才不会退化成只按另一个筛
+        let by_author_id: Option<HashSet<usize>> = prepared.author_id.as_ref().map(|id| {
+            self.author_id_idx
+                .get(id.as_str())
+                .map(|indices| indices.iter().copied().collect())
+                .unwrap_or_default()
+        });
+        let by_author_username: Option<HashSet<usize>> =
+            prepared.author_username.as_ref().map(|username| {
+                self.author_username_idx
+                    .get(username.as_str())
+                    .map(|indices| indices.iter().copied().collect())
+                    .unwrap_or_default()
+            });
 
-                let candidate_set = match (author_id_set, author_username_set) {
-                    (Some(a), Some(b)) => a.intersection(&b).copied().collect(),
-                    (Some(a), None) => a,
-                    (None, Some(b)) => b,
-                    (None, None) => HashSet::new(),
-                };
-
-                candidate_set.into_iter().collect()
-            } else {
-                (0..self.entries.len()).collect()
-            };
+        let candidates: Vec<usize> = match (by_author_id, by_author_username) {
+            (Some(ids), Some(usernames)) => ids.intersection(&usernames).copied().collect(),
+            (Some(ids), None) => ids.into_iter().collect(),
+            (None, Some(usernames)) => usernames.into_iter().collect(),
+            (None, None) => (0..self.entries.len()).collect(),
+        };
 
         // 按来源过滤，作者精确匹配与普通分支统一在这里生效
         let candidates: Vec<usize> = match query.source {
@@ -204,7 +203,7 @@ impl LyricIndexDB {
 
         // 两个 `Option` 的 `Some` / `None` 只由「参数有没有传」决定，与索引查得到查不到无关：
         // 查不到的作者是空候选，而不是「该条件不生效」——否则两个作者参数同时传、
-        // 其中一个查不到时，AND 会退化成只按另一个筛（`search_by_fields` 就有这个 bug）
+        // 其中一个查不到时，AND 会退化成只按另一个筛（`search_by_fields` 曾有这个 bug）
         let by_author_id: Option<Vec<usize>> = filter.author_id.as_ref().map(|author_id| {
             self.author_id_idx
                 .get(author_id.as_str())

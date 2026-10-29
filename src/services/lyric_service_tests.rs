@@ -1,6 +1,9 @@
 use std::{
     collections::HashMap,
-    sync::Arc,
+    sync::{
+        Arc,
+        Mutex,
+    },
 };
 
 use super::*;
@@ -21,11 +24,37 @@ use crate::{
     utils::ttml::parse_and_format_ttml,
 };
 
+/// `fts_results` 按关键词预置命中（可带 snippet）。实现遵守 [`LyricStore`] 的契约：
+/// `search_lyrics_fts` 按 `FtsFilter` 过滤（以索引条目代替 SQL 里的 `lyrics` 表）并清空
+/// snippet，`fetch_lyric_snippets` 再按 id 从预置命中里取回 snippet
 #[derive(Default)]
 pub struct MemoryLyricStore {
     pub db: Arc<LyricIndexDB>,
     pub ttml_map: HashMap<String, String>,
     pub fts_results: HashMap<String, Vec<LyricHit>>,
+    /// 每次 `fetch_lyric_snippets` 被请求的 id，用来断言 snippet 只为本页补取
+    pub snippet_requests: Mutex<Vec<Vec<LyricId>>>,
+}
+
+fn fts_filter_matches(db: &LyricIndexDB, id: LyricId, filter: &FtsFilter) -> bool {
+    if filter.is_empty() {
+        return true;
+    }
+    let Some(&idx) = db.id_idx.get(&id) else {
+        return false;
+    };
+    let entry = &db.entries[idx];
+    filter.source.is_none_or(|source| entry.source == source)
+        && filter
+            .author_id
+            .as_deref()
+            .is_none_or(|author_id| entry.author_ids.iter().any(|a| a.as_str() == author_id))
+        && filter.author_username.as_deref().is_none_or(|username| {
+            entry
+                .author_usernames
+                .iter()
+                .any(|a| a.as_str() == username)
+        })
 }
 
 #[allow(clippy::unused_async_trait_impl)]
@@ -45,9 +74,38 @@ impl LyricStore for MemoryLyricStore {
     async fn search_lyrics_fts(
         &self,
         keyword: &str,
-        _limit: u64,
+        filter: &FtsFilter,
     ) -> Result<Vec<LyricHit>, AppError> {
-        Ok(self.fts_results.get(keyword).cloned().unwrap_or_default())
+        Ok(self
+            .fts_results
+            .get(keyword)
+            .into_iter()
+            .flatten()
+            .filter(|hit| fts_filter_matches(&self.db, hit.id, filter))
+            .map(|hit| LyricHit {
+                snippet: None,
+                ..hit.clone()
+            })
+            .collect())
+    }
+
+    async fn fetch_lyric_snippets(
+        &self,
+        keyword: &str,
+        ids: &[LyricId],
+    ) -> Result<HashMap<LyricId, String>, AppError> {
+        self.snippet_requests
+            .lock()
+            .expect("snippet_requests lock")
+            .push(ids.to_vec());
+        Ok(self
+            .fts_results
+            .get(keyword)
+            .into_iter()
+            .flatten()
+            .filter(|hit| ids.contains(&hit.id))
+            .filter_map(|hit| hit.snippet.clone().map(|snippet| (hit.id, snippet)))
+            .collect())
     }
 
     async fn load_index(&self) -> Arc<LyricIndexDB> {
@@ -113,6 +171,7 @@ fn create_test_store() -> (MemoryLyricStore, LyricId, LyricId) {
             db: Arc::new(db),
             ttml_map,
             fts_results,
+            ..MemoryLyricStore::default()
         },
         id1,
         id2,
@@ -780,6 +839,91 @@ async fn search_lyric_fts_hit_carries_lyric_hit() {
     let lyric_hit = res.items[0].lyric_hit.as_ref().unwrap();
     assert_eq!(lyric_hit.field, LyricMatchField::MainLyric);
     assert_eq!(lyric_hit.snippet.as_deref(), Some("Hello World Lyric"));
+}
+
+/// `count` 条同词正文命中的公库条目，作者轮流是 `a0` / `a1`，rank 随下标递增
+fn bulk_fts_store(count: usize) -> MemoryLyricStore {
+    let entries: Vec<SongEntry> = (0..count)
+        .map(|i| {
+            let author = format!("a{}", i % 2);
+            make_song(
+                &format!("bulk_{i:03}.ttml"),
+                i as u64,
+                &[&format!("Bulk {i}")],
+                &["Bulk Artist"],
+                &[],
+                &[],
+                &[&author],
+                &[],
+            )
+        })
+        .collect();
+    let hits: Vec<LyricHit> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| LyricHit {
+            id: entry.id,
+            rank: i as f64,
+            field: LyricMatchField::MainLyric,
+            snippet: Some(format!("snippet {i}")),
+        })
+        .collect();
+    MemoryLyricStore {
+        db: Arc::new(LyricIndexDB::from_entries(entries)),
+        fts_results: HashMap::from([("needle".to_string(), hits)]),
+        ..MemoryLyricStore::default()
+    }
+}
+
+#[tokio::test]
+async fn search_lyric_fetches_snippets_only_for_current_page() {
+    let store = bulk_fts_store(30);
+    let query = SearchQuery {
+        lyric_text: Some("needle".to_string()),
+        ..Default::default()
+    };
+
+    let res = search_lyric(
+        &store,
+        &query,
+        Pagination {
+            page: 2,
+            page_size: 10,
+        },
+    )
+    .await;
+
+    assert_eq!(res.pagination.total, 30);
+    assert_eq!(res.items.len(), 10);
+    let page_ids: Vec<LyricId> = res.items.iter().map(|hit| hit.entry.id).collect();
+    let requests = store.snippet_requests.lock().unwrap().clone();
+    assert_eq!(requests, vec![page_ids], "snippet 只为本页条目补取一次");
+    // 按 rank 升序，第 2 页是 rank 10..20
+    for (offset, hit) in res.items.iter().enumerate() {
+        let snippet = hit.lyric_hit.as_ref().and_then(|l| l.snippet.as_deref());
+        assert_eq!(snippet, Some(format!("snippet {}", offset + 10).as_str()));
+    }
+}
+
+#[tokio::test]
+async fn search_lyric_global_keyword_fallback_respects_author_filter() {
+    // `q` 降级触发的正文补全是「元数据 ∪ 正文」，正文一侧同样必须遵守作者条件，
+    // 否则别的作者的条目会经正文命中混进 authorId 的搜索结果
+    let store = bulk_fts_store(20);
+    let query = SearchQuery {
+        global_keyword: Some("needle".to_string()),
+        author_id: Some("a1".to_string()),
+        ..Default::default()
+    };
+
+    let res = search_lyric(&store, &query, default_pagination()).await;
+
+    assert_eq!(res.pagination.total, 10);
+    assert!(
+        res.items
+            .iter()
+            .all(|hit| hit.entry.author_ids.iter().any(|a| a.as_str() == "a1"))
+    );
 }
 
 #[tokio::test]

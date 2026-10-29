@@ -207,6 +207,34 @@ pub struct SearchQuery {
     pub source: Option<LyricSource>,
 }
 
+/// FTS 正文检索的结构化过滤条件，下推进 SQL 与 MATCH 同时生效
+///
+/// 语义与 [`LyricIndexDB::search_by_fields`] 的同名条件一致：各维度之间 AND，
+/// 作者精确且大小写敏感，`None` 表示该维度不限
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FtsFilter {
+    pub source: Option<LyricSource>,
+    pub author_id: Option<String>,
+    pub author_username: Option<String>,
+}
+
+impl FtsFilter {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.source.is_none() && self.author_id.is_none() && self.author_username.is_none()
+    }
+}
+
+impl From<&SearchQuery> for FtsFilter {
+    fn from(query: &SearchQuery) -> Self {
+        Self {
+            source: query.source,
+            author_id: query.author_id.clone(),
+            author_username: query.author_username.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LyricMatchField {
     MainLyric,

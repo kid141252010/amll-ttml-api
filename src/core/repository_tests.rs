@@ -1056,3 +1056,49 @@ fn search_by_fields_author_branch_filters_by_source() {
     );
     assert_eq!(searched_names(&db, &query(None)), ["priv.ttml", "pub.ttml"]);
 }
+
+// --- search_by_fields 双作者参数 AND ---
+
+#[test]
+fn search_by_fields_unknown_author_yields_empty_not_unconstrained() {
+    // 两个作者参数同时传、其中一个查不到时，AND 必须为空，而不是退化成只按另一个筛
+    let db = filter_fixture();
+    for (author_id, author_username) in [("nobody", "alice"), ("a1", "nobody")] {
+        let query = SearchQuery {
+            author_id: Some(author_id.to_string()),
+            author_username: Some(author_username.to_string()),
+            ..Default::default()
+        };
+        assert!(
+            searched_names(&db, &query).is_empty(),
+            "authorId={author_id} authorUsername={author_username}"
+        );
+
+        // 带文本字段时走模糊打分分支，同样不能漏过
+        let query = SearchQuery {
+            track_name: Some("All".to_string()),
+            ..query
+        };
+        assert!(searched_names(&db, &query).is_empty());
+    }
+}
+
+#[test]
+fn search_by_fields_authors_on_different_entries_yield_empty() {
+    // a1 只投了 all / ncm，bob 只投了 isrc：两者都存在但没有共同条目
+    let db = filter_fixture();
+    let query = SearchQuery {
+        author_id: Some("a1".to_string()),
+        author_username: Some("bob".to_string()),
+        ..Default::default()
+    };
+    assert!(searched_names(&db, &query).is_empty());
+
+    // 对照：两者有共同条目时取交集
+    let query = SearchQuery {
+        author_id: Some("a2".to_string()),
+        author_username: Some("alice".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(searched_names(&db, &query), ["bare.ttml"]);
+}
