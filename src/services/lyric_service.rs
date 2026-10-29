@@ -326,13 +326,9 @@ pub async fn lrclib_get_by_fields<R: LyricStore>(
     query: &SearchQuery,
 ) -> Result<(SongEntry, TTMLFormatResult), AppError> {
     let db = store.load_index().await;
-    let matched_hits = db.search_by_fields(query);
-
-    if matched_hits.is_empty() {
-        return Err(AppError::LyricNotFound);
-    }
-
-    let best_hit = &matched_hits[0];
+    let best_hit = db
+        .best_match_by_fields(query)
+        .ok_or(AppError::LyricNotFound)?;
 
     if best_hit.score < MatchType::Medium {
         return Err(AppError::LyricNotFound);
