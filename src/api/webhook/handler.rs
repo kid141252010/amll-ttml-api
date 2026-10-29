@@ -1,33 +1,43 @@
 use axum::{
-    Json,
     body::Bytes,
     extract::State,
-    http::HeaderMap,
+    http::{
+        HeaderMap,
+        header,
+    },
+    response::IntoResponse,
 };
 use hmac::{
     Hmac,
     KeyInit,
     Mac,
 };
-use serde_json::{
-    Value,
-    json,
-};
+use serde::Serialize;
+use serde_json::Value;
 use sha2::Sha256;
 use tracing::info;
 
 use crate::{
+    api::shared::{
+        cache::NO_STORE_CACHE_CONTROL,
+        dto::ApiSuccess,
+    },
     core::error::AppError,
     services::AppState,
 };
 
 type HmacSha256 = Hmac<Sha256>;
 
+#[derive(Debug, Serialize)]
+pub struct WebhookSyncData {
+    pub message: &'static str,
+}
+
 pub async fn handle_webhook_sync(
     headers: HeaderMap,
     State(state): State<AppState>,
     body: Bytes,
-) -> Result<Json<Value>, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     // 触发同步是非幂等操作，而 TLS 1.3 的 0-RTT 早期数据可被重放，
     // 因此在做任何签名校验之前先拒绝，要求客户端在完整握手后重试
     if is_early_data(&headers) {
@@ -83,10 +93,12 @@ pub async fn handle_webhook_sync(
         }
     });
 
-    Ok(Json(json!({
-        "status": 200,
-        "message": "Sync triggered"
-    })))
+    Ok((
+        [(header::CACHE_CONTROL, NO_STORE_CACHE_CONTROL)],
+        ApiSuccess(WebhookSyncData {
+            message: "Sync triggered",
+        }),
+    ))
 }
 
 /// 请求是否随 TLS 1.3 的 0-RTT 早期数据到达
