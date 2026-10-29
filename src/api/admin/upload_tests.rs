@@ -761,6 +761,7 @@ async fn batch_route_returns_music_name_per_result() {
     assert!(results[2]["error"].is_string());
 }
 
+#[tokio::test]
 async fn single_route_saves_private_lyric_under_both_prefixes() {
     let state = batch_state().await;
     for prefix in crate::API_PREFIXES {
