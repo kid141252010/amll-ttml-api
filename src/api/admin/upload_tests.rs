@@ -11,7 +11,11 @@ use axum::{
     http::{
         Request,
         StatusCode,
-        header::CONTENT_TYPE,
+        header::{
+            AUTHORIZATION,
+            CACHE_CONTROL,
+            CONTENT_TYPE,
+        },
     },
 };
 use sea_orm::ConnectionTrait;
@@ -20,6 +24,7 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::{
+    api::shared::cache::NO_STORE_CACHE_CONTROL,
     core::{
         db::{
             queries::fetch_song_entries,
@@ -839,4 +844,28 @@ async fn single_route_requires_admin_secret() {
             .is_empty()
     );
     assert_eq!(state.store.lyric_count(), 0);
+}
+
+#[tokio::test]
+async fn single_route_rejects_non_multipart_with_no_store() {
+    let state = batch_state().await;
+    for prefix in crate::API_PREFIXES {
+        let request = Request::post(format!("{prefix}/admin/lyrics"))
+            .header(AUTHORIZATION, "Bearer s3cret")
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .expect("request");
+        // upload_response 断言了 no-store，且要求响应体是统一的 JSON 错误形状
+        let (status, json) = upload_response(&state, request).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(json["status"], 400);
+    }
+
+    // 鉴权仍先于 multipart 校验
+    let request = Request::post("/v1/admin/lyrics")
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from("{}"))
+        .expect("request");
+    let (status, _) = upload_response(&state, request).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }

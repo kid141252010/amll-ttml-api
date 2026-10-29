@@ -83,6 +83,16 @@ pub async fn handle_ttml_file(
                 HeaderValue::from_static("application/xml; charset=utf-8"),
             ),
             (header::CACHE_CONTROL, WEAK_CACHE_CONTROL),
+            // TTML 可内嵌 XHTML 命名空间的 <script>，浏览器直接打开时会在本站同源下执行；
+            // sandbox 把文档放进不透明源并禁用脚本，不影响播放器 fetch 取词
+            (
+                header::CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static("sandbox"),
+            ),
+            (
+                header::X_CONTENT_TYPE_OPTIONS,
+                HeaderValue::from_static("nosniff"),
+            ),
         ],
         ttml_text,
     ))

@@ -14,8 +14,6 @@ use axum::{
         HeaderMap,
         HeaderValue,
         header::{
-            AUTHORIZATION,
-            CACHE_CONTROL,
             CONTENT_DISPOSITION,
             CONTENT_TYPE,
         },
@@ -25,11 +23,6 @@ use axum::{
         Response,
     },
 };
-use sha2::{
-    Digest,
-    Sha256,
-};
-use subtle::ConstantTimeEq;
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
@@ -41,7 +34,10 @@ use crate::{
             map_daily_file,
         },
         shared::{
-            cache::NO_STORE_CACHE_CONTROL,
+            auth::{
+                authorize_bearer,
+                no_store,
+            },
             dto::ApiSuccess,
         },
     },
@@ -116,40 +112,6 @@ async fn download_file(
 /// 统计未启用时端点等同于不存在；启用了但没配密钥是服务端配置错误
 fn authorize<'a>(state: &'a AppState, headers: &HeaderMap) -> Result<&'a Analytics, AppError> {
     let analytics = state.analytics.as_ref().ok_or(AppError::NotFound)?;
-
-    let secret = analytics.secret().ok_or_else(|| {
-        AppError::InternalServerError(
-            "ANALYTICS_SECRET environment variable is not configured on the server.".to_string(),
-        )
-    })?;
-
-    let provided = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .ok_or(AppError::Unauthorized)?;
-
-    if token_matches(provided, secret) {
-        Ok(analytics)
-    } else {
-        Err(AppError::Unauthorized)
-    }
+    authorize_bearer(headers, analytics.secret(), "ANALYTICS_SECRET")?;
+    Ok(analytics)
 }
-
-/// 常量时间比较。先各自取哈希，长度差异也不会从耗时上泄露
-fn token_matches(provided: &str, expected: &str) -> bool {
-    let provided = Sha256::digest(provided.as_bytes());
-    let expected = Sha256::digest(expected.as_bytes());
-    provided.as_slice().ct_eq(expected.as_slice()).into()
-}
-
-fn no_store(mut response: Response) -> Response {
-    response
-        .headers_mut()
-        .insert(CACHE_CONTROL, NO_STORE_CACHE_CONTROL);
-    response
-}
-
-#[cfg(test)]
-#[path = "handler_tests.rs"]
-mod tests;

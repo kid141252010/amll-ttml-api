@@ -19,6 +19,10 @@ use tracing::info;
 
 use crate::{
     api::shared::{
+        auth::{
+            bearer_token,
+            token_matches,
+        },
         cache::NO_STORE_CACHE_CONTROL,
         dto::ApiSuccess,
     },
@@ -59,33 +63,30 @@ pub async fn handle_webhook_sync(
         .and_then(|h| h.to_str().ok())
         .unwrap_or("unknown");
 
-    let force = serde_json::from_slice::<Value>(&body)
-        .ok()
+    let payload = serde_json::from_slice::<Value>(&body).ok();
+    let force = payload
+        .as_ref()
         .and_then(|v| v.get("force").and_then(Value::as_bool))
         .unwrap_or(false);
 
-    if let Ok(payload_json) = serde_json::from_slice::<Value>(&body) {
-        info!(
-            event = %event_type,
-            force,
-            payload = %payload_json,
-            "Webhook sync triggered via API"
-        );
-    } else if !body.is_empty() {
-        let body_str = String::from_utf8_lossy(&body);
-        info!(
-            event = %event_type,
-            force,
-            body = %body_str,
-            "Webhook sync triggered via API"
-        );
-    } else {
-        info!(
-            event = %event_type,
-            force,
-            "Webhook sync triggered via API with empty body"
-        );
-    }
+    // GitHub payload 含推送者邮箱等个人信息，只记录定位一次推送所需的少数字段
+    let field = |name: &str| {
+        payload
+            .as_ref()
+            .and_then(|v| v.get(name))
+            .and_then(Value::as_str)
+            .unwrap_or("-")
+            .to_owned()
+    };
+    info!(
+        event = %event_type,
+        force,
+        action = %field("action"),
+        git_ref = %field("ref"),
+        after = %field("after"),
+        body_len = body.len(),
+        "Webhook sync triggered via API"
+    );
     let state_clone = state;
     tokio::spawn(async move {
         if let Err(e) = state_clone.syncer.sync(force).await {
@@ -115,11 +116,8 @@ fn is_early_data(headers: &HeaderMap) -> bool {
 
 fn verify_webhook_auth(headers: &HeaderMap, body: &[u8], secret: &str) -> bool {
     // Bearer Token
-    if let Some(auth_header) = headers.get("Authorization").and_then(|h| h.to_str().ok()) {
-        let expected_header = format!("Bearer {secret}");
-        if auth_header == expected_header {
-            return true;
-        }
+    if bearer_token(headers).is_some_and(|token| token_matches(token, secret)) {
+        return true;
     }
 
     // GitHub 原生 X-Hub-Signature-256 HMAC-SHA256 签名
