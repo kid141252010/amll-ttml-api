@@ -33,7 +33,7 @@
 ```
 
 * **无缝热更新 (Zero-Downtime)**：利用双容器插槽（`amll-api-blue` 端口 3000 与 `amll-api-green` 端口 3001）平滑交替轮换，配合健康检查与 Nginx 重载，实现发布更新时外部请求完全零感停机。
-* **配置与代码解耦**：所有敏感密钥（`SENTRY_DSN`、`SYNC_SECRET`、`ANALYTICS_IP_KEY`、`ANALYTICS_SECRET`）独立保存在服务器本地 `/etc/amll-ttml-api/env`，绝不提交至代码仓库。
+* **配置与代码解耦**：所有敏感密钥（`SENTRY_DSN`、`SYNC_SECRET`、`ADMIN_SECRET`、`ANALYTICS_IP_KEY`、`ANALYTICS_SECRET`）独立保存在服务器本地 `/etc/amll-ttml-api/env`，绝不提交至代码仓库。
 
 ---
 
@@ -65,7 +65,8 @@ sudo mkdir -p /etc/amll-ttml-api
 sudo bash -c 'cat <<EOF > /etc/amll-ttml-api/env
 PORT=3000
 SENTRY_DSN=填入你的 Sentry DSN 链接
-SYNC_SECRET=/webhook/sync 接口用的密钥
+SYNC_SECRET=/webhook/sync 接口用的密钥，用 openssl rand -hex 32 生成
+ADMIN_SECRET=私库上传接口与 /admin 页面用的密钥，用 openssl rand -hex 32 生成
 ANALYTICS_DIR=/var/lib/amll-ttml-api/analytics
 ANALYTICS_IP_KEY=客户端 IP 的 HMAC 密钥，用 openssl rand -hex 32 生成
 ANALYTICS_SECRET=团队下载统计文件用的 token，用 openssl rand -hex 32 生成
@@ -77,6 +78,8 @@ sudo chmod 600 /etc/amll-ttml-api/env
 # 4. 验证文件内容
 sudo cat /etc/amll-ttml-api/env
 ```
+
+`SYNC_SECRET`、`ADMIN_SECRET`、`ANALYTICS_SECRET` 这几个鉴权密钥都应是至少 32 字节的随机值（`openssl rand -hex 32` 生成的 64 位十六进制串即满足），不要用口令或可猜测的字符串。
 
 ### 2.3 内核连接跟踪与网络参数调优
 为避免高峰期流量导致 Linux 内核连接跟踪表（`nf_conntrack`）满载丢包（导致反代 499 / 504 错误），配置内核参数：
@@ -138,6 +141,20 @@ upstream amll_api_backend {
 EOF'
 ```
 
+再创建 `/etc/nginx/conf.d/amll_csp.conf`，按路径选择 Content-Security-Policy（`map` 只能写在 http 级，而 `conf.d/*.conf` 正是在 http 块内被 include 的；不要写进 `amll_upstream.conf`，部署脚本每次发布都会整体覆盖那个文件）：
+
+```bash
+sudo bash -c 'cat <<EOF > /etc/nginx/conf.d/amll_csp.conf
+# WebUI 页面与静态资源用宽松一档的 CSP，其余所有路径（/v1/、/api/v1/、TTML 直链、404）用严格策略
+map \$uri \$amll_csp {
+    default                          "default-src '\''none'\''; frame-ancestors '\''none'\''; sandbox";
+    ~^/(admin|app\.js|style\.css)?\$  "default-src '\''self'\''; script-src '\''self'\'' '\''unsafe-inline'\''; object-src '\''none'\''; base-uri '\''none'\''; form-action '\''self'\''; frame-ancestors '\''none'\''";
+}
+EOF'
+```
+
+为什么要分两档：API 响应（JSON / TTML）不该被浏览器当成页面执行任何东西，所以用 `default-src 'none'` 加 `sandbox` 锁死；而 `/`、`/admin` 是要真正运行的页面，严格策略会拦掉 `/app.js`、`/style.css`、admin 页的内嵌脚本和对 `/api/v1/` 的 `fetch`，`sandbox` 还会把页面放进不透明源，admin 页读 `sessionStorage` 直接抛 `SecurityError`。WebUI 这一档依据 `web/` 的实际需求定：全部资源同源，`admin.html` 有一段内嵌 `<script>`（所以 `script-src` 需要 `'unsafe-inline'`），没有内联样式、图片、字体或第三方资源，作者链接与 TTML 下载（Blob URL）属于导航，不受这些指令约束。改动 `web/` 引入新的资源类型时要同步放宽这里。
+
 ### 4.2 创建 Nginx 站点配置
 创建 `/etc/nginx/sites-available/amll-ttml-api` 并软链接至 `sites-enabled`：
 
@@ -172,7 +189,12 @@ server {
 
     add_header X-Content-Type-Options "nosniff" always;
     add_header Strict-Transport-Security "max-age=31536000" always;
-    add_header Content-Security-Policy "default-src '\''none'\''; frame-ancestors '\''none'\''; sandbox" always;
+    # 取值见 conf.d/amll_csp.conf：WebUI 路径宽松一档，其余路径严格
+    add_header Content-Security-Policy \$amll_csp always;
+
+    # nginx 默认只放行 1m 请求体。单文件上传 /v1/admin/lyrics 的应用层限额是 2MiB，这里不能小于它；
+    # 批量上传的 64m 见下方单独的 location
+    client_max_body_size 2m;
 
     gzip on;
     gzip_vary on;
@@ -205,18 +227,28 @@ server {
         application/xml+rss
         image/svg+xml;
 
+    # 以下代理参数写在 server 级，由各 location 继承。注意 nginx 的继承规则：
+    # 某个 location 里只要写了一条 add_header / proxy_set_header，server 级的同类指令在该
+    # location 内就全部失效，需要的话得在那个 location 里写全
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+
+    limit_req zone=apilimit burst=50 nodelay;
+
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header Early-Data \$ssl_early_data;
+
     location / {
         proxy_pass http://amll_api_backend;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
+    }
 
-        limit_req zone=apilimit burst=50 nodelay;
-
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header Early-Data \$ssl_early_data;
+    # 批量上传：应用层限额 64MiB（DefaultBodyLimit），nginx 侧与之对齐
+    location ~ ^(/api)?/v1/admin/lyrics/batch\$ {
+        client_max_body_size 64m;
+        proxy_pass http://amll_api_backend;
     }
 }
 EOF'
