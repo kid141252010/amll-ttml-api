@@ -249,7 +249,7 @@ nextBtn.addEventListener('click', () => {
   if (currentParams && !nextBtn.disabled) doSearch(currentPage + 1);
 });
 
-// URL ?q= 预填并自动搜索（供管理页"按文件名搜索确认"跳转）
+// URL ?q= 预填并自动搜索（供管理页"按歌名搜索确认"跳转）
 (function initFromQuery() {
   const q = new URLSearchParams(location.search).get('q');
   if (q) {
