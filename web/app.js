@@ -121,15 +121,20 @@ async function fetchDetail(id) {
   return data;
 }
 
+// 每行是 [标签, 展示用 HTML, 复制用纯文本]，复制不经 innerHTML 反解析
 function infoRows(data) {
   const rows = [];
+  function textRow(label, values) {
+    const text = values.join(' / ');
+    rows.push([label, escapeHtml(text), text]);
+  }
   const names = (data.musicNames || []).filter(Boolean);
   const artists = (data.artistNames || []).filter(Boolean);
   const albums = (data.albumNames || []).filter(Boolean);
   const authors = (data.authorUsernames || []).filter(Boolean);
-  if (names.length) rows.push(['歌名', escapeHtml(names.join(' / '))]);
-  if (artists.length) rows.push(['歌手', escapeHtml(artists.join(' / '))]);
-  if (albums.length) rows.push(['专辑', escapeHtml(albums.join(' / '))]);
+  if (names.length) textRow('歌名', names);
+  if (artists.length) textRow('歌手', artists);
+  if (albums.length) textRow('专辑', albums);
   [
     ['网易云音乐 ID', data.ncmMusicIds],
     ['QQ 音乐 ID', data.qqMusicIds],
@@ -138,15 +143,15 @@ function infoRows(data) {
     ['ISRC', data.isrcs]
   ].forEach(function (platform) {
     const ids = (platform[1] || []).filter(Boolean);
-    if (ids.length) rows.push([platform[0], escapeHtml(ids.join(' / '))]);
+    if (ids.length) textRow(platform[0], ids);
   });
   if (authors.length) {
     rows.push(['制作者', authors.map(function (u) {
       return '<a class="author-link" href="https://github.com/' + encodeURIComponent(u) +
         '" target="_blank" rel="noopener">' + escapeHtml(u) + '</a>';
-    }).join('、')]);
+    }).join('、'), authors.join('、')]);
   }
-  rows.push(['文件名', escapeHtml(data.filename || '')]);
+  textRow('文件名', [data.filename || '']);
   return rows;
 }
 
@@ -159,10 +164,7 @@ function bindCardActions(cardEl, item) {
 
   copyBtn.addEventListener('click', function () {
     const lines = infoRows(item).map(function (r) {
-      // 去掉制作者行里的 HTML 标签再复制
-      const tmp = document.createElement('div');
-      tmp.innerHTML = r[1];
-      return r[0] + '：' + tmp.textContent;
+      return r[0] + '：' + r[2];
     });
     const text = lines.join('\n');
     function done() {
