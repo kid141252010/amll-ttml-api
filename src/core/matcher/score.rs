@@ -46,9 +46,8 @@ pub fn score_entry(query: &PreparedQuery, entry: &SongEntry) -> MatchType {
     if query.track_name.is_none()
         && query.artist_name.is_none()
         && query.album_name.is_none()
-        && query.global_keyword.is_some()
+        && let Some(q_norm) = query.global_keyword.as_deref()
     {
-        let q_norm = query.global_keyword.as_deref().unwrap();
         return score_global_keyword(q_norm, entry);
     }
 

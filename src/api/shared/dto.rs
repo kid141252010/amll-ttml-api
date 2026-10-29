@@ -14,6 +14,7 @@ use serde::{
     Serialize,
     Serializer,
 };
+use tracing::error;
 
 use crate::{
     api::shared::cache::NOT_FOUND_CACHE_CONTROL,
@@ -154,7 +155,7 @@ impl IntoResponse for AppError {
         let (status, error_str, message) = error_parts(&self);
 
         if status >= 500 {
-            tracing::error!(
+            error!(
                 status,
                 error = error_str,
                 detail = ?self,

@@ -179,7 +179,7 @@ async fn fetch_raw_lyric(client: &Client, filename: &str) -> Result<String, AppE
     Ok(text)
 }
 
-#[allow(clippy::unused_async_trait_impl)]
+#[expect(clippy::unused_async_trait_impl)]
 impl LyricStore for DbLyricStore {
     async fn fetch_lyric_ttml(&self, filename: &str) -> Result<String, AppError> {
         self.fetch_lyric_ttml(filename).await
