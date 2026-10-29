@@ -84,6 +84,8 @@ pub struct UploadLyricData {
     pub id: u64,
     pub filename: String,
     pub source: &'static str,
+    /// 条目的第一歌名，管理页用它生成搜索确认链接；TTML 没有歌名时为 `null`
+    pub music_name: Option<String>,
 }
 
 const MAX_BATCH_FILES: usize = 100;
@@ -101,6 +103,7 @@ struct UploadLyricsBatchData {
 struct UploadLyricResult {
     filename: String,
     id: Option<u64>,
+    music_name: Option<String>,
     error: Option<String>,
 }
 
@@ -163,10 +166,10 @@ async fn process_batch_upload(
         }
         .await;
 
-        let (id, error) = match result {
-            Ok(id) => {
+        let (id, music_name, error) = match result {
+            Ok(saved) => {
                 succeeded += 1;
-                (Some(id.get()), None)
+                (Some(saved.id.get()), saved.music_name, None)
             }
             Err(error) => {
                 let message = match error {
@@ -175,12 +178,13 @@ async fn process_batch_upload(
                     }
                     _ => "Failed to save lyric".to_string(),
                 };
-                (None, Some(message))
+                (None, None, Some(message))
             }
         };
         results.push(UploadLyricResult {
             filename,
             id,
+            music_name,
             error,
         });
     }
@@ -249,7 +253,7 @@ async fn upload_lyric(
     let content = String::from_utf8(file_bytes)
         .map_err(|_| AppError::BadRequest("file is not valid UTF-8".to_string()))?;
 
-    let id = upsert_private_lyric(&state.store.conn, &filename, &content).await?;
+    let saved = upsert_private_lyric(&state.store.conn, &filename, &content).await?;
 
     // 上传后立即可查是本接口的契约：索引重建失败就大声报错，
     // 不像后台同步那样 warn 后继续用旧索引
@@ -264,10 +268,18 @@ async fn upload_lyric(
     }
 
     Ok(ApiSuccess(UploadLyricData {
-        id: id.get(),
+        id: saved.id.get(),
         filename,
         source: "private",
+        music_name: saved.music_name,
     }))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SavedLyric {
+    id: LyricId,
+    /// 第一个非空歌名，与搜索页卡片标题取 `musicNames[0]` 的口径一致
+    music_name: Option<String>,
 }
 
 /// 解析 TTML 并以 `source='private'` upsert；同名私库文件再次上传会整行更新
@@ -275,7 +287,7 @@ async fn upsert_private_lyric(
     conn: &DatabaseConnection,
     filename: &str,
     content: &str,
-) -> Result<LyricId, AppError> {
+) -> Result<SavedLyric, AppError> {
     let result = ttml_processor::parse_ttml(content).map_err(|e| {
         let mut msg = format!("{e:?}");
         if msg.len() > 300 {
@@ -283,6 +295,15 @@ async fn upsert_private_lyric(
         }
         AppError::BadRequest(format!("Invalid TTML: {msg}"))
     })?;
+
+    let music_name = result
+        .metadata
+        .title
+        .iter()
+        .flatten()
+        .map(|name| name.trim())
+        .find(|name| !name.is_empty())
+        .map(str::to_string);
 
     let mut model = build_entity_from_ttml(filename, content, &result);
     merge_ttml_platform_ids(&mut model, &result.metadata);
@@ -329,7 +350,10 @@ async fn upsert_private_lyric(
             }
         })?;
 
-    Ok(LyricId::from_private_filename(filename))
+    Ok(SavedLyric {
+        id: LyricId::from_private_filename(filename),
+        music_name,
+    })
 }
 
 fn validate_filename(raw: &str) -> Result<String, AppError> {

@@ -63,6 +63,15 @@
       .replace(/'/g, '&#39;');
   }
 
+  // 有歌名时跳到搜索页按歌名确认（搜索页只从 URL 读取 q）；没有歌名时直接查看该 id 的歌词
+  function confirmLink(item) {
+    if (item.musicName) {
+      return '<a class="btn" href="/?q=' + encodeURIComponent(item.musicName) + '">按歌名搜索确认</a>';
+    }
+    return '<a class="btn" href="/api/v1/lyrics/get?id=' + encodeURIComponent(item.id) +
+      '" target="_blank" rel="noopener">按 id 查看</a>';
+  }
+
   document.getElementById('upload-form').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const secret = secretInput.value.trim();
@@ -99,18 +108,18 @@
       if (isBatch) {
         resultEl.innerHTML = '<p>成功 ' + escapeHtml(d.succeeded) + '，失败 ' + escapeHtml(d.failed) + '</p>' +
           d.results.map(item => item.error === null
-            ? '<p>成功：' + escapeHtml(item.filename) + '（id：' + escapeHtml(item.id) + '）</p>'
+            ? '<p>成功：' + escapeHtml(item.filename) + '（id：' + escapeHtml(item.id) + '） ' + confirmLink(item) + '</p>'
             : '<p class="error">失败：' + escapeHtml(item.filename) + '（' + escapeHtml(item.error) + '）</p>'
           ).join('');
         return;
       }
-      const searchUrl = '/?q=' + encodeURIComponent(d.filename);
       resultEl.innerHTML =
         '<div class="card"><div class="card-head"><span class="title">上传成功</span>' +
         '<span class="badge private">私有</span></div>' +
         '<div class="meta">id：' + escapeHtml(d.id) + '</div>' +
         '<div class="meta">文件名：' + escapeHtml(d.filename) + '</div>' +
-        '<p><a class="btn" href="' + searchUrl + '">按此文件名搜索确认</a></p></div>';
+        (d.musicName ? '<div class="meta">歌名：' + escapeHtml(d.musicName) + '</div>' : '') +
+        '<p>' + confirmLink(d) + '</p></div>';
     } catch (e) {
       resultEl.innerHTML = '<p class="error">请求失败：' + escapeHtml(e.message) + '</p>';
     } finally {

@@ -107,13 +107,15 @@ async fn upsert_private_lyric_round_trip() {
 
     let id1 = upsert_private_lyric(&conn, "mine.ttml", SAMPLE_TTML)
         .await
-        .expect("first upload");
+        .expect("first upload")
+        .id;
     assert_eq!(id1, LyricId::from_private_filename("mine.ttml"));
 
     let updated = SAMPLE_TTML.replace("hello", "hello updated");
     let id2 = upsert_private_lyric(&conn, "mine.ttml", &updated)
         .await
-        .expect("second upload");
+        .expect("second upload")
+        .id;
     assert_eq!(id1, id2, "re-upload keeps the same id");
 
     let entries = fetch_song_entries(&conn).await.expect("fetch entries");
@@ -136,6 +138,32 @@ async fn upsert_private_lyric_round_trip() {
     assert_eq!(row.ncm_music_ids, serde_json::json!(["1001"]));
     assert_eq!(row.qq_music_ids, serde_json::json!(["001abc"]));
     assert_eq!(row.isrcs, serde_json::json!(["US123"]));
+}
+
+/// 多歌名 TTML：首项是空白，应跳过取第一个非空歌名
+const NAMED_TTML: &str = r#"<tt xmlns="http://www.w3.org/ns/ttml" xmlns:amll="http://www.example.com/ns/amll">
+        <head><metadata>
+            <amll:meta key="musicName" value="  "/>
+            <amll:meta key="musicName" value="First Title"/>
+            <amll:meta key="musicName" value="Second Title"/>
+            <amll:meta key="artists" value="Some Artist"/>
+        </metadata></head>
+        <body><div><p begin="00:00:01.000" end="00:00:02.000">hello</p></div></body>
+    </tt>"#;
+
+#[tokio::test]
+async fn upsert_private_lyric_returns_first_music_name() {
+    let conn = init_db("sqlite::memory:").await.expect("init db");
+
+    let saved = upsert_private_lyric(&conn, "named.ttml", NAMED_TTML)
+        .await
+        .expect("named upload");
+    assert_eq!(saved.music_name.as_deref(), Some("First Title"));
+
+    let saved = upsert_private_lyric(&conn, "unnamed.ttml", SAMPLE_TTML)
+        .await
+        .expect("unnamed upload");
+    assert_eq!(saved.music_name, None);
 }
 
 async fn batch_state() -> AppState {
@@ -589,4 +617,60 @@ async fn batch_route_relaxes_body_limit_without_changing_single_upload() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["data"]["succeeded"], 1);
     assert_eq!(state.store.lyric_count(), 1);
+}
+
+#[tokio::test]
+async fn single_route_returns_first_music_name() {
+    let state = batch_state().await;
+    let request = multipart_request(
+        "/v1/admin/lyrics",
+        &[
+            ("filename", None, "named.ttml"),
+            ("file", Some("named.ttml"), NAMED_TTML),
+        ],
+    );
+    let (status, json) = upload_response(&state, request).await;
+    assert_eq!(status, StatusCode::OK);
+    let data = &json["data"];
+    assert_eq!(
+        data["id"],
+        LyricId::from_private_filename("named.ttml").get()
+    );
+    assert_eq!(data["filename"], "named.ttml");
+    assert_eq!(data["source"], "private");
+    assert_eq!(data["musicName"], "First Title");
+
+    let request = multipart_request(
+        "/v1/admin/lyrics",
+        &[
+            ("filename", None, "unnamed.ttml"),
+            ("file", Some("unnamed.ttml"), SAMPLE_TTML),
+        ],
+    );
+    let (status, json) = upload_response(&state, request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(json["data"]["musicName"].is_null());
+}
+
+#[tokio::test]
+async fn batch_route_returns_music_name_per_result() {
+    let state = batch_state().await;
+    let request = multipart_request(
+        "/v1/admin/lyrics/batch",
+        &[
+            ("file", Some("named.ttml"), NAMED_TTML),
+            ("file", Some("unnamed.ttml"), SAMPLE_TTML),
+            ("file", Some("invalid.ttml"), "<tt"),
+        ],
+    );
+    let (status, json) = upload_response(&state, request).await;
+    assert_eq!(status, StatusCode::OK);
+    let results = &json["data"]["results"];
+    assert_eq!(results[0]["filename"], "named.ttml");
+    assert_eq!(results[0]["musicName"], "First Title");
+    assert_eq!(results[1]["filename"], "unnamed.ttml");
+    assert!(results[1]["musicName"].is_null());
+    assert_eq!(results[2]["filename"], "invalid.ttml");
+    assert!(results[2]["musicName"].is_null());
+    assert!(results[2]["error"].is_string());
 }
