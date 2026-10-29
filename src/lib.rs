@@ -2,6 +2,7 @@ pub use core::db::setup::init_db;
 
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     middleware::{
         from_fn,
         from_fn_with_state,
@@ -77,6 +78,11 @@ pub fn create_app(state: AppState) -> Router {
         .route(
             "/admin/lyrics",
             post(api::admin::upload::handle_upload_lyric),
+        )
+        .route(
+            "/admin/lyrics/batch",
+            post(api::admin::upload::handle_upload_lyrics_batch)
+                .layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
         );
 
     let trace_layer =
