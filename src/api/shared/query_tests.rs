@@ -21,8 +21,8 @@ fn native_search_empty_string_params_returns_error() {
 fn search_source_parsing() {
     for (raw, expected) in [
         ("private", Some(LyricSource::Private)),
-        ("PUBLIC", Some(LyricSource::Public)),
-        ("+PrIvAtE+", Some(LyricSource::Private)),
+        ("public", Some(LyricSource::Public)),
+        ("+private+", Some(LyricSource::Private)),
         ("all", None),
     ] {
         let (query, _) =
@@ -36,6 +36,29 @@ fn search_source_parsing() {
         )
         .unwrap();
         assert_eq!(exact.source, expected);
+    }
+}
+
+/// `source` 与 `sort` / `order` / `hasId` 一样区分大小写
+#[test]
+fn search_source_is_case_sensitive() {
+    for raw in ["Private", "PUBLIC", "All"] {
+        let message = format!("'source' must be one of 'private', 'public', 'all', got '{raw}'.");
+        assert!(matches!(
+            parse_search_query(&format!("q=x&source={raw}"), &NATIVE_SEARCH_DIALECT),
+            Err(AppError::BadRequest(ref msg)) if *msg == message
+        ));
+        assert!(matches!(
+            parse_search_query_exact(
+                &format!("track_name=x&artist_name=y&source={raw}"),
+                &LRCLIB_GET_DIALECT,
+            ),
+            Err(AppError::BadRequest(ref msg)) if *msg == message
+        ));
+        assert!(matches!(
+            parse_list_query(&format!("source={raw}")),
+            Err(AppError::BadRequest(ref msg)) if *msg == message
+        ));
     }
 }
 
@@ -116,7 +139,7 @@ fn native_search_source_param() {
     let (query, _) = parse_search_query("q=x&source=private", &NATIVE_SEARCH_DIALECT).unwrap();
     assert_eq!(query.source, Some(LyricSource::Private));
 
-    let (query, _) = parse_search_query("q=x&source=PUBLIC", &NATIVE_SEARCH_DIALECT).unwrap();
+    let (query, _) = parse_search_query("q=x&source=public", &NATIVE_SEARCH_DIALECT).unwrap();
     assert_eq!(query.source, Some(LyricSource::Public));
 
     // all 与未传等价
@@ -143,6 +166,56 @@ fn native_search_source_alone_is_not_a_search_param() {
         result,
         Err(AppError::BadRequest(ref msg)) if msg == "Missing valid search parameters."
     ));
+}
+
+/// list 专有参数在 search 上是 400，不静默忽略
+#[test]
+fn native_search_rejects_list_only_params() {
+    for param in LIST_ONLY_PARAMS {
+        let result = parse_search_query(&format!("q=x&{param}=1"), &NATIVE_SEARCH_DIALECT);
+        let expected = format!("'{param}' is only supported by '/lyrics/list'.");
+        assert!(
+            matches!(result, Err(AppError::BadRequest(ref msg)) if *msg == expected),
+            "{param} should be rejected"
+        );
+    }
+
+    // 先于「缺检索参数」报错，给出更具体的原因
+    assert!(matches!(
+        parse_search_query("cursor=1768754400682_699269132670751", &NATIVE_SEARCH_DIALECT),
+        Err(AppError::BadRequest(ref msg)) if msg == "'cursor' is only supported by '/lyrics/list'."
+    ));
+}
+
+/// search 真正支持的参数（含与 list 同名的 page / pageSize / source / authorId / authorUsername）
+/// 不受 list 专有参数拦截的影响；空值与其他参数一样跳过
+#[test]
+fn native_search_list_only_guard_keeps_supported_params() {
+    let (query, pagination) = parse_search_query(
+        "q=x&page=2&pageSize=10&source=private&authorId=1&authorUsername=u&cursor=&sort=",
+        &NATIVE_SEARCH_DIALECT,
+    )
+    .unwrap();
+    assert_eq!(pagination.page, 2);
+    assert_eq!(pagination.page_size, 10);
+    assert_eq!(query.source, Some(LyricSource::Private));
+    assert_eq!(query.author_id.as_deref(), Some("1"));
+    assert_eq!(query.author_username.as_deref(), Some("u"));
+}
+
+/// lrclib 兼容端点沿用原版行为，未知参数（含 list 专有参数名）一律忽略
+#[test]
+fn lrclib_dialects_ignore_list_only_params() {
+    let (query, _) =
+        parse_search_query("q=x&cursor=1&sort=id&since=1", &LRCLIB_SEARCH_DIALECT).unwrap();
+    assert_eq!(query.global_keyword.as_deref(), Some("x"));
+
+    let query = parse_search_query_exact(
+        "track_name=x&artist_name=y&cursor=1&order=asc",
+        &LRCLIB_GET_DIALECT,
+    )
+    .unwrap();
+    assert_eq!(query.track_name.as_deref(), Some("x"));
 }
 
 #[test]
@@ -269,7 +342,7 @@ fn list_query_source_param() {
         Some(LyricSource::Private)
     );
     assert_eq!(
-        parse_list_query("source=PUBLIC").unwrap().filter.source,
+        parse_list_query("source=public").unwrap().filter.source,
         Some(LyricSource::Public)
     );
     // all 等价于不传
@@ -277,7 +350,11 @@ fn list_query_source_param() {
     assert_eq!(parse_list_query("").unwrap().filter.source, None);
 
     let result = parse_list_query("source=bogus");
-    assert!(matches!(result, Err(AppError::BadRequest(_))));
+    assert!(matches!(
+        result,
+        Err(AppError::BadRequest(ref msg))
+            if msg == "'source' must be one of 'private', 'public', 'all', got 'bogus'."
+    ));
 }
 
 #[test]
@@ -542,12 +619,22 @@ fn list_query_rejects_since_greater_than_until() {
 fn list_query_rejects_invalid_since_or_until() {
     assert!(matches!(
         parse_list_query("since=invalid"),
-        Err(AppError::BadRequest(_))
+        Err(AppError::BadRequest(ref msg))
+            if msg == "'since' must be a valid non-negative integer timestamp, got 'invalid'."
     ));
     assert!(matches!(
-        parse_list_query("until=invalid"),
-        Err(AppError::BadRequest(_))
+        parse_list_query("until=-1"),
+        Err(AppError::BadRequest(ref msg))
+            if msg == "'until' must be a valid non-negative integer timestamp, got '-1'."
     ));
+}
+
+/// 文案写的是 non-negative，0 必须被接受
+#[test]
+fn list_query_accepts_zero_since_and_until() {
+    let query = parse_list_query("since=0&until=0").unwrap();
+    assert_eq!(query.filter.since, Some(0));
+    assert_eq!(query.filter.until, Some(0));
 }
 
 // --- LRCLIB Search 测试组 ---
@@ -587,6 +674,21 @@ fn lrclib_search_ignores_duration_and_unsupported() {
     )
     .unwrap();
     assert_eq!(query.track_name.as_deref(), Some("ME!"));
+}
+
+/// `duration` 被接受但当前不参与匹配
+#[test]
+fn lrclib_get_accepts_and_ignores_duration() {
+    let with_duration = parse_search_query_exact(
+        "track_name=ME!&artist_name=Taylor&duration=193",
+        &LRCLIB_GET_DIALECT,
+    )
+    .unwrap();
+    let without =
+        parse_search_query_exact("track_name=ME!&artist_name=Taylor", &LRCLIB_GET_DIALECT).unwrap();
+    assert_eq!(with_duration.track_name, without.track_name);
+    assert_eq!(with_duration.artist_name, without.artist_name);
+    assert_eq!(with_duration.album_name, without.album_name);
 }
 
 #[test]
@@ -749,7 +851,29 @@ fn get_empty_filename_returns_error() {
 #[test]
 fn get_invalid_filename_extension_returns_error() {
     let result = parse_get_query("filename=1768754400682-250306205-r6IrpmBd.lrc");
-    assert!(result.is_err());
+    assert!(matches!(
+        result,
+        Err(AppError::BadRequest(ref msg))
+            if msg == "Invalid filename: '1768754400682-250306205-r6IrpmBd.lrc'. Must end with '.ttml'."
+    ));
+}
+
+/// 与上传接口一致，`.ttml` 后缀不区分大小写；文件名本身原样保留用于精确查找
+#[test]
+fn get_filename_extension_is_case_insensitive() {
+    for name in ["a.TTML", "a.Ttml", "a.ttml"] {
+        let result = parse_get_query(&format!("filename={name}")).unwrap();
+        assert_eq!(result.id_query.filename.as_deref(), Some(name));
+    }
+}
+
+#[test]
+fn has_ttml_extension_ignores_case() {
+    assert!(has_ttml_extension("x.ttml"));
+    assert!(has_ttml_extension("x.TTML"));
+    assert!(!has_ttml_extension("x.ttm"));
+    assert!(!has_ttml_extension("x.lrc"));
+    assert!(!has_ttml_extension("ttml"));
 }
 
 #[test]

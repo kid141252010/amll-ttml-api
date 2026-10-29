@@ -53,6 +53,24 @@ fn validate_filename_accepts_ttml() {
 }
 
 #[test]
+fn validate_filename_messages_follow_sentence_style() {
+    for (bad, expected) in [
+        ("  ", "Filename must not be empty."),
+        ("song.lrc", "Filename must end with '.ttml'."),
+        ("a/b.ttml", "Filename must not contain path separators."),
+    ] {
+        assert!(
+            matches!(validate_filename(bad), Err(AppError::BadRequest(ref msg)) if msg == expected),
+            "{bad:?}"
+        );
+    }
+    assert!(matches!(
+        validate_filename(&"x".repeat(300)),
+        Err(AppError::BadRequest(ref msg)) if msg == "Filename too long (max 255 bytes)."
+    ));
+}
+
+#[test]
 fn validate_filename_rejects_bad_inputs() {
     for bad in [
         "",
@@ -122,6 +140,7 @@ async fn upsert_private_lyric_round_trip() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].source, LyricSource::Private);
     assert_eq!(entries[0].id, id1);
+    assert_created_at_is_now(entries[0].timestamp);
 
     // lyric_text 应为更新后的内容
     let row = entity::Entity::find_by_id(id1.get().cast_signed())
@@ -164,6 +183,73 @@ async fn upsert_private_lyric_returns_first_music_name() {
         .await
         .expect("unnamed upload");
     assert_eq!(saved.music_name, None);
+}
+
+/// 私库条目的 `createdAt` 取上传时刻：非 0，且落在测试运行的这几秒内
+fn assert_created_at_is_now(created_at: u64) {
+    let now = u64::try_from(now_millis()).expect("positive now");
+    assert_ne!(created_at, 0);
+    assert!(
+        created_at <= now && now - created_at < 60_000,
+        "createdAt {created_at} should be close to now {now}"
+    );
+}
+
+#[tokio::test]
+async fn upsert_private_lyric_uses_upload_time_and_refreshes_on_reupload() {
+    let conn = init_db("sqlite::memory:").await.expect("init db");
+
+    // 文件名带数字前缀也不按文件名派生，私库一律取上传时刻
+    upsert_private_lyric(&conn, "1000-mine.ttml", SAMPLE_TTML)
+        .await
+        .expect("first upload");
+    let first = fetch_song_entries(&conn).await.expect("entries")[0].timestamp;
+    assert_created_at_is_now(first);
+
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    upsert_private_lyric(&conn, "1000-mine.ttml", SAMPLE_TTML)
+        .await
+        .expect("re-upload");
+    let second = fetch_song_entries(&conn).await.expect("entries")[0].timestamp;
+    assert!(second > first, "re-upload refreshes createdAt");
+}
+
+#[tokio::test]
+async fn public_filename_conflict_is_detected_from_structured_error() {
+    let conn = init_db("sqlite::memory:").await.expect("init db");
+    let parsed = ttml_processor::parse_ttml(SAMPLE_TTML).expect("sample ttml");
+    let public = build_entity_from_ttml("dup.ttml", SAMPLE_TTML, &parsed);
+    entity::Entity::insert(entity::ActiveModel::from(public.clone()))
+        .exec(&conn)
+        .await
+        .expect("seed public row");
+
+    // 私库同名行：(source, filename) 不冲突，撞的是 lyrics.filename 列级 UNIQUE
+    let mut same_name = public.clone();
+    same_name.id += 1;
+    same_name.source = "private".to_string();
+    let err = entity::Entity::insert(entity::ActiveModel::from(same_name))
+        .exec(&conn)
+        .await
+        .unwrap_err();
+    assert!(is_public_filename_conflict(&err), "{:?}", err.sql_err());
+
+    // 主键冲突同属唯一约束，但不是公库重名
+    let mut same_id = public;
+    same_id.filename = "other.ttml".to_string();
+    let err = entity::Entity::insert(entity::ActiveModel::from(same_id))
+        .exec(&conn)
+        .await
+        .unwrap_err();
+    assert!(err.sql_err().is_some());
+    assert!(!is_public_filename_conflict(&err));
+
+    // 非约束类错误
+    let err = conn
+        .execute_unprepared("SELECT * FROM no_such_table")
+        .await
+        .unwrap_err();
+    assert!(!is_public_filename_conflict(&err));
 }
 
 async fn batch_state() -> AppState {
@@ -284,7 +370,7 @@ async fn batch_upload_continues_after_public_filename_conflict() {
     assert!(data.results[0].id.is_none());
     assert_eq!(
         data.results[0].error.as_deref(),
-        Some("filename already exists in the public library")
+        Some("Filename already exists in the public library.")
     );
     assert_eq!(data.results[1].filename, "private.ttml");
     assert!(data.results[1].error.is_none());
@@ -328,11 +414,11 @@ async fn batch_upload_checks_filename_and_utf8_before_saving() {
     assert_eq!((data.succeeded, data.failed), (1, 2));
     assert_eq!(
         data.results[0].error.as_deref(),
-        Some("filename must not contain path separators")
+        Some("Filename must not contain path separators.")
     );
     assert_eq!(
         data.results[1].error.as_deref(),
-        Some("file is not valid UTF-8")
+        Some("File is not valid UTF-8.")
     );
     assert!(data.results[2].id.is_some());
     assert_eq!(state.store.lyric_count(), 1);
@@ -405,7 +491,7 @@ async fn batch_upload_reports_index_rebuild_failure_after_saving() {
     assert!(matches!(
         error,
         AppError::InternalServerError(message)
-            if message == "Lyric saved but index rebuild failed"
+            if message == "Lyric saved but index rebuild failed."
     ));
     let row = entity::Entity::find_by_id(
         LyricId::from_private_filename("saved.ttml")
@@ -574,7 +660,7 @@ async fn batch_route_handles_missing_part_filename_as_file_error() {
     assert_eq!(json["data"]["failed"], 1);
     assert_eq!(
         json["data"]["results"][0]["error"],
-        "filename must not be empty"
+        "Filename must not be empty."
     );
     assert_eq!(state.store.lyric_count(), 1);
 }
@@ -673,4 +759,84 @@ async fn batch_route_returns_music_name_per_result() {
     assert_eq!(results[2]["filename"], "invalid.ttml");
     assert!(results[2]["musicName"].is_null());
     assert!(results[2]["error"].is_string());
+}
+
+#[tokio::test]
+async fn single_route_saves_private_lyric_under_both_prefixes() {
+    let state = batch_state().await;
+    for prefix in crate::API_PREFIXES {
+        let request = multipart_request(
+            &format!("{prefix}/admin/lyrics"),
+            &[
+                ("filename", None, "Mine.TTML"),
+                ("file", Some("ignored-part-name.ttml"), SAMPLE_TTML),
+            ],
+        );
+        let (status, json) = upload_response(&state, request).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], 200);
+        assert_eq!(
+            json["data"]["id"],
+            LyricId::from_private_filename("Mine.TTML").get()
+        );
+        assert_eq!(json["data"]["filename"], "Mine.TTML");
+        assert_eq!(json["data"]["source"], "private");
+    }
+
+    // 两个前缀写的是同一行；上传后立即进索引
+    let entries = fetch_song_entries(&state.store.conn)
+        .await
+        .expect("entries");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].source, LyricSource::Private);
+    assert_created_at_is_now(entries[0].timestamp);
+    assert_eq!(state.store.lyric_count(), 1);
+
+    // 大写后缀在 `/lyrics/get?filename=` 侧同样被接受，并按原名精确命中
+    let response = create_app(state.clone())
+        .oneshot(
+            Request::get("/v1/lyrics/get?filename=Mine.TTML")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let json: Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(json["data"]["filename"], "Mine.TTML");
+    assert_eq!(json["data"]["source"], "private");
+}
+
+#[tokio::test]
+async fn single_route_requires_admin_secret() {
+    let state = batch_state().await;
+    for token in [None, Some("Bearer wrong"), Some("s3cret")] {
+        let mut request = multipart_request(
+            "/v1/admin/lyrics",
+            &[
+                ("filename", None, "a.ttml"),
+                ("file", Some("a.ttml"), SAMPLE_TTML),
+            ],
+        );
+        request.headers_mut().remove(AUTHORIZATION);
+        if let Some(token) = token {
+            request
+                .headers_mut()
+                .insert(AUTHORIZATION, token.parse().unwrap());
+        }
+        let (status, json) = upload_response(&state, request).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{token:?}");
+        assert_eq!(json["status"], 401);
+        assert_eq!(json["error"], "Unauthorized");
+    }
+    assert!(
+        fetch_song_entries(&state.store.conn)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(state.store.lyric_count(), 0);
 }

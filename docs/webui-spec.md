@@ -8,8 +8,10 @@
 
 ## 现有 API（不要改行为，只调用）
 
-- `GET /api/v1/lyrics/search`：参数 `q`（全局关键词）、`musicName`、`artistName`、`albumName`、`lyricText`、`authorId`、`authorUsername`（至少一个非空，否则 400）；`source=private|public|all`（默认 all）；`pageSize`（默认 20）；`cursor`（翻页游标；**注意：cursor 必须配 source=private 或 public，配 all 会 400**）。返回 `{"status":200,"data":{"items":[...],"cursor":...}}`，item 含 `id`、`filename`、`source`、`musicNames`、`artistNames`、`albumNames`、`matchContext.snippet` 等。
+- `GET /api/v1/lyrics/search`：参数 `q`（全局关键词）、`musicName`、`artistName`、`albumName`、`lyricText`、`authorId`、`authorUsername`（至少一个非空，否则 400）；`source=private|public|all`（默认 all，区分大小写）；`page`（从 1 起，默认 1）、`pageSize`（默认 50，上限 100）。**search 只有页码分页、不支持 `cursor`**：`cursor` / `before` / `sort` / `order` / `since` / `until` / `hasId` / `missingId` 是 `/lyrics/list` 专有参数，传给 search 会 400。返回 `{"status":200,"data":{"items":[...],"pagination":{"page","pageSize","total","totalPages","hasMore"}}}`，item 含 `id`、`filename`、`source`、`musicNames`、`artistNames`、`albumNames`、`matchContext.snippet` 等。
 - `GET /api/v1/lyrics/get?id=<id>`：取单首歌词全文（含 `raw_ttml`）。
+- `cursor` 游标分页只在 `GET /api/v1/lyrics/list` 上提供（仅 `sort=createdAt`，且必须显式 `source=private` 或 `source=public`），本 UI 不使用。
+- LRCLIB 兼容端点（本 UI 不使用，记录在此备查）：`GET /api/v1/lrclib/get` 接受 LRCLIB 原版的 `duration` 参数但**不参与匹配**（只按 `track_name` + `artist_name` + 可选 `album_name`）；`GET /api/v1/lrclib/search` 与 `/lrclib/get` 额外支持本服务扩展的 `source=private|public|all`，`/lrclib/search` 还支持 `page` / `pageSize`（规则同 `/lyrics/search`）。
 - `POST /api/v1/admin/lyrics`：multipart，字段 `filename`（文本）+ `file`（文件）；Header `Authorization: Bearer <ADMIN_SECRET>`；成功 `{"status":200,"data":{"id":...,"filename":...,"source":"private"}}`；密钥错 401。
 
 ## 实现要求
@@ -20,7 +22,7 @@
    - `GET /admin` → `admin.html`
    - 静态资源按路径 serve（`rust-embed` + `mime_guess` 或等价方案）。
    - `/admin` 不从公开页链接（低调处理），**不做服务端鉴权**——真正的鉴权由上传 API 的 Bearer 保证。
-3. **搜索页 `/`**：表单含 q / musicName / artistName / albumName / lyricText（至少填一项，前端校验）；source 下拉（all/public/private，默认 all）；结果卡片概览直接展示歌名、歌手、专辑、source 徽标（private 高亮）、网易云音乐 ID、QQ 音乐 ID、Apple Music ID、Spotify ID、ISRC、制作者、文件名和匹配片段。平台 ID 使用搜索响应里的元数据，无需点击展开或请求 get 接口；仅展示非空字段，同一平台的多个 ID 用 ` / ` 分隔。信息栏与“复制信息”按钮共用 `infoRows()`，复制结果包含全部平台 ID，制作者以纯文本用户名复制、页面中链接到 GitHub。卡片提供独立的“复制信息”“下载 .ttml”“歌词预览”按钮，只有预览按钮控制 TTML 的展开与收起；点击或选择信息栏文本不会切换预览。下载和首次预览按需调用 get 接口并共享歌词缓存，预览区不重复显示平台 ID。pageSize=20，上一页/下一页用 cursor（翻页时保持用户选的 source，避免 cursor+all=400）。
+3. **搜索页 `/`**：表单含 q / musicName / artistName / albumName / lyricText（至少填一项，前端校验）；source 下拉（all/public/private，默认 all）；结果卡片概览直接展示歌名、歌手、专辑、source 徽标（private 高亮）、网易云音乐 ID、QQ 音乐 ID、Apple Music ID、Spotify ID、ISRC、制作者、文件名和匹配片段。平台 ID 使用搜索响应里的元数据，无需点击展开或请求 get 接口；仅展示非空字段，同一平台的多个 ID 用 ` / ` 分隔。信息栏与“复制信息”按钮共用 `infoRows()`，复制结果包含全部平台 ID，制作者以纯文本用户名复制、页面中链接到 GitHub。卡片提供独立的“复制信息”“下载 .ttml”“歌词预览”按钮，只有预览按钮控制 TTML 的展开与收起；点击或选择信息栏文本不会切换预览。下载和首次预览按需调用 get 接口并共享歌词缓存，预览区不重复显示平台 ID。pageSize=20，上一页/下一页用 `page` 页码翻页（翻页时保持用户选的 source 与检索条件），按 `pagination.hasMore` / `totalPages` 决定按钮可用性。
 4. **管理页 `/admin`**：顶部 ADMIN_SECRET 密码框（只存 sessionStorage，不进 localStorage）；上传表单：文件选择（.ttml）、filename 文本框（默认取所选文件名、可改）；提交 multipart 到 `/api/v1/admin/lyrics`；成功显示 id/filename/source，失败显示服务端错误信息（401 时提示密钥错误）；上传后提供"按文件名搜索确认"快捷按钮。
 5. **前端**：纯 HTML/CSS/JS，不引入框架；fetch 调 `/api/v1/...`；页面中文；移动端可用。
 6. **约束**：不改现有 API 行为；`cargo test` 全过；`cargo clippy --all-targets` 零警告；分支 `feat/webui`（已切好）。

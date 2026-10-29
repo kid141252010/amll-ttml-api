@@ -10,11 +10,15 @@ use axum::{
         Path,
         State,
     },
-    http::header,
+    http::{
+        HeaderValue,
+        header,
+    },
     response::IntoResponse,
 };
 
 use crate::{
+    api::shared::cache::WEAK_CACHE_CONTROL,
     core::{
         error::AppError,
         models::IdQuery,
@@ -41,7 +45,7 @@ fn resolve_platform(platform: &str) -> Result<PlatformKind, AppError> {
         "am-lyrics" => Ok(PlatformKind::Am),
         "spotify-lyrics" => Ok(PlatformKind::Spotify),
         _ => Err(AppError::BadRequest(format!(
-            "unsupported platform: {platform}"
+            "Unsupported platform: '{platform}'."
         ))),
     }
 }
@@ -71,8 +75,15 @@ pub async fn handle_ttml_file(
 
     let (_, ttml_text) = lyric_service::get_lyric(&state.store, id_query).await?;
 
+    // 按平台 ID 匹配，结果会随上游新增歌词变化，与 `/lyrics/get?ncmMusicId=` 同档
     Ok((
-        [(header::CONTENT_TYPE, "application/xml; charset=utf-8")],
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/xml; charset=utf-8"),
+            ),
+            (header::CACHE_CONTROL, WEAK_CACHE_CONTROL),
+        ],
         ttml_text,
     ))
 }

@@ -91,9 +91,11 @@ pub async fn handle_get(
 pub async fn handle_get_by_id(
     State(state): State<AppState>,
     annotator: Annotator,
-    Path(id): Path<u64>,
+    Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let lyric_id = LyricId::from_u64(id)?;
+    // 按字符串取再自行解析：`Path<u64>` 的提取失败是 axum 的纯文本 400，
+    // 不是全站统一的 JSON 错误形状
+    let lyric_id = LyricId::parse(&id)?;
 
     let result = lyric_service::lrclib_get_by_id(&state.store, lyric_id).await;
     annotator.lookup(&result, |(entry, _)| entry.id, MatchKind::Id, None);

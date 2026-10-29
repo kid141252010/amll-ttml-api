@@ -42,7 +42,26 @@ pub enum SearchRequirement {
 pub struct SearchDialect {
     pub field_map: &'static [(&'static str, SearchFieldTarget)],
     pub requirement: SearchRequirement,
+    /// 只属于 `/v1/lyrics/list`、本端点明确拒绝（400）而非静默忽略的参数
+    ///
+    /// 免得调用方误以为游标、排序、时间过滤在检索端点上生效了
+    pub list_only_params: &'static [&'static str],
 }
+
+/// `/v1/lyrics/list` 专有的参数，`/v1/lyrics/search` 收到时返回 400
+///
+/// 只列 list 有而 search 没有的参数：`page` / `pageSize` / `source` 两边都支持，
+/// `authorId` / `authorUsername` 在 search 里是检索字段，都不在此列
+const LIST_ONLY_PARAMS: &[&str] = &[
+    "cursor",
+    "before",
+    "sort",
+    "order",
+    "since",
+    "until",
+    "hasId",
+    "missingId",
+];
 
 /// `/v1/lyrics/search` 的请求参数映射
 pub static NATIVE_SEARCH_DIALECT: SearchDialect = SearchDialect {
@@ -56,9 +75,13 @@ pub static NATIVE_SEARCH_DIALECT: SearchDialect = SearchDialect {
         ("authorUsername", SearchFieldTarget::AuthorUsername),
     ],
     requirement: SearchRequirement::AnyParamWithQFallback,
+    list_only_params: LIST_ONLY_PARAMS,
 };
 
 /// `/v1/lrclib/search` 的请求参数映射
+///
+/// 除 LRCLIB 原版参数外，还接受本服务扩展的 `source` / `page` / `pageSize`，规则同
+/// `/v1/lyrics/search`
 pub static LRCLIB_SEARCH_DIALECT: SearchDialect = SearchDialect {
     field_map: &[
         ("q", SearchFieldTarget::GlobalKeyword),
@@ -67,9 +90,15 @@ pub static LRCLIB_SEARCH_DIALECT: SearchDialect = SearchDialect {
         ("album_name", SearchFieldTarget::AlbumName),
     ],
     requirement: SearchRequirement::AnyParamWithQFallback,
+    list_only_params: &[],
 };
 
 /// `/v1/lrclib/get` 的请求参数映射
+///
+/// LRCLIB 原版的 `duration` 参数被接受但当前不参与匹配：它不在映射表里，
+/// 与其他未知参数一样被忽略（实现时长容差匹配的成本较高，暂未做）
+///
+/// 另接受本服务扩展的 `source` 来源过滤；单条精确匹配，不分页
 pub static LRCLIB_GET_DIALECT: SearchDialect = SearchDialect {
     field_map: &[
         ("track_name", SearchFieldTarget::TrackName),
@@ -80,13 +109,14 @@ pub static LRCLIB_GET_DIALECT: SearchDialect = SearchDialect {
         SearchFieldTarget::TrackName,
         SearchFieldTarget::ArtistName,
     ]),
+    list_only_params: &[],
 };
 
 pub fn parse_search_query(
     query_str: &str,
     dialect: &SearchDialect,
 ) -> Result<(SearchQuery, Pagination), AppError> {
-    let mut parsed = parse_query_internal(query_str, dialect);
+    let mut parsed = parse_query_internal(query_str, dialect)?;
 
     if !parsed.has_any_param {
         return Err(AppError::BadRequest(
@@ -104,7 +134,7 @@ pub fn parse_search_query_exact(
     query_str: &str,
     dialect: &SearchDialect,
 ) -> Result<SearchQuery, AppError> {
-    let mut parsed = parse_query_internal(query_str, dialect);
+    let mut parsed = parse_query_internal(query_str, dialect)?;
 
     if let SearchRequirement::ExactRequired(reqs) = dialect.requirement {
         for req in reqs {
@@ -129,13 +159,14 @@ pub fn parse_search_query_exact(
     Ok(parsed.query)
 }
 
-/// 解析检索端点的 `source` 参数，取值与报错文案和 `/v1/lyrics/list` 一致
+/// 解析 `source` 参数，检索端点与 `/v1/lyrics/list` 共用
 ///
+/// 与 `sort` / `order` / `hasId` 一样区分大小写，只认小写取值。
 /// `all` 与未传等价，都返回 `None`（不过滤）
 fn parse_source(raw: Option<&str>) -> Result<Option<LyricSource>, AppError> {
     raw.map(str::trim).map_or_else(
         || Ok(None),
-        |s| match s.to_lowercase().as_str() {
+        |s| match s {
             "private" => Ok(Some(LyricSource::Private)),
             "public" => Ok(Some(LyricSource::Public)),
             "all" => Ok(None),
@@ -231,7 +262,7 @@ pub fn parse_list_query(query_str: &str) -> Result<ListQuery, AppError> {
     let since = match since_raw.as_deref().map(str::trim) {
         Some(s) if !s.is_empty() => Some(s.parse::<u64>().map_err(|_| {
             AppError::BadRequest(format!(
-                "'since' must be a valid positive integer timestamp, got '{s}'."
+                "'since' must be a valid non-negative integer timestamp, got '{s}'."
             ))
         })?),
         _ => None,
@@ -239,7 +270,7 @@ pub fn parse_list_query(query_str: &str) -> Result<ListQuery, AppError> {
     let until = match until_raw.as_deref().map(str::trim) {
         Some(s) if !s.is_empty() => Some(s.parse::<u64>().map_err(|_| {
             AppError::BadRequest(format!(
-                "'until' must be a valid positive integer timestamp, got '{s}'."
+                "'until' must be a valid non-negative integer timestamp, got '{s}'."
             ))
         })?),
         _ => None,
@@ -256,19 +287,7 @@ pub fn parse_list_query(query_str: &str) -> Result<ListQuery, AppError> {
     filter.since = since;
     filter.until = until;
 
-    filter.source = match source_raw.as_deref().map(str::trim) {
-        None => None,
-        Some(s) => match s.to_lowercase().as_str() {
-            "private" => Some(LyricSource::Private),
-            "public" => Some(LyricSource::Public),
-            "all" => None,
-            _ => {
-                return Err(AppError::BadRequest(format!(
-                    "'source' must be one of 'private', 'public', 'all', got '{s}'."
-                )));
-            }
-        },
-    };
+    filter.source = parse_source(source_raw.as_deref())?;
 
     let pagination = Pagination::from_raw(page_raw.as_deref(), page_size_raw.as_deref())?;
     let sort = match sort_raw.as_deref().map(str::trim) {
@@ -369,7 +388,10 @@ struct ParsedQueryParams {
     pub source_raw: Option<String>,
 }
 
-fn parse_query_internal(query_str: &str, dialect: &SearchDialect) -> ParsedQueryParams {
+fn parse_query_internal(
+    query_str: &str,
+    dialect: &SearchDialect,
+) -> Result<ParsedQueryParams, AppError> {
     let mut query = SearchQuery::default();
     let mut has_non_q_param = false;
     let mut has_q = false;
@@ -398,6 +420,11 @@ fn parse_query_internal(query_str: &str, dialect: &SearchDialect) -> ParsedQuery
         if key_str == "source" {
             source_raw = Some(val);
             continue;
+        }
+        if dialect.list_only_params.contains(&key_str) {
+            return Err(AppError::BadRequest(format!(
+                "'{key_str}' is only supported by '/lyrics/list'."
+            )));
         }
 
         if let Some(&target) =
@@ -446,13 +473,18 @@ fn parse_query_internal(query_str: &str, dialect: &SearchDialect) -> ParsedQuery
 
     let has_any_param = has_q || has_non_q_param;
 
-    ParsedQueryParams {
+    Ok(ParsedQueryParams {
         query,
         has_any_param,
         page_raw,
         page_size_raw,
         source_raw,
-    }
+    })
+}
+
+/// 文件名是否以 `.ttml` 结尾（不区分大小写），上传与 `/v1/lyrics/get?filename=` 共用
+pub fn has_ttml_extension(filename: &str) -> bool {
+    filename.to_ascii_lowercase().ends_with(".ttml")
 }
 
 pub struct GetQuery {
@@ -513,9 +545,8 @@ pub fn parse_get_query(query_str: &str) -> Result<GetQuery, AppError> {
         )));
     }
 
-    #[expect(clippy::case_sensitive_file_extension_comparisons)]
     if let Some(ref filename) = query.filename
-        && !filename.ends_with(".ttml")
+        && !has_ttml_extension(filename)
     {
         return Err(AppError::BadRequest(format!(
             "Invalid filename: '{filename}'. Must end with '.ttml'."

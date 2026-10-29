@@ -47,7 +47,7 @@ impl LyricId {
     /// 从文件名生成 53 位唯一的 [`LyricId`]
     ///
     /// 采用 FNV-1a 64-bit 哈希并按 53 位掩码截断
-    #[allow(clippy::unreadable_literal)]
+    #[expect(clippy::unreadable_literal)]
     pub fn from_filename(filename: &str) -> Self {
         const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
         const FNV_PRIME: u64 = 0x100000001b3;

@@ -20,6 +20,7 @@ use sea_orm::{
     Statement,
 };
 use serde_json::Value;
+use tracing::warn;
 
 use crate::{
     core::{
@@ -227,7 +228,7 @@ pub async fn search_fts(
         let id: i64 = match row.try_get("", "id") {
             Ok(id) => id,
             Err(e) => {
-                tracing::warn!("Failed to read 'id' column from FTS result: {e}");
+                warn!("Failed to read 'id' column from FTS result: {e}");
                 continue;
             }
         };
@@ -235,7 +236,7 @@ pub async fn search_fts(
         let rank: f64 = match row.try_get("", "rank") {
             Ok(rank) => rank,
             Err(e) => {
-                tracing::warn!("Failed to read 'rank' column from FTS result: {e}");
+                warn!("Failed to read 'rank' column from FTS result: {e}");
                 continue;
             }
         };

@@ -277,3 +277,177 @@ async fn lyric_search_with_author_id_does_not_miss_low_ranked_hits() {
     assert_eq!(res.pagination.total, 0);
     assert!(res.items.is_empty());
 }
+
+/// 本地起一个假的 raw-lyrics 目录服务，代替 GitHub；只认 `remote.ttml`，其余 404
+///
+/// 返回 (目录 URL, 请求计数)
+async fn fake_remote() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::atomic::{
+        AtomicUsize,
+        Ordering,
+    };
+
+    use axum::{
+        Router,
+        extract::Path,
+        http::StatusCode,
+        routing::get,
+    };
+
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counter = hits.clone();
+    let app = Router::new().route(
+        "/raw-lyrics/{file}",
+        get(move |Path(file): Path<String>| {
+            let counter = counter.clone();
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                if file == "remote.ttml" {
+                    Ok(REMOTE_TTML)
+                } else {
+                    Err(StatusCode::NOT_FOUND)
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    (format!("http://{addr}/raw-lyrics"), hits)
+}
+
+const DB_TTML: &str = r#"<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="00:01.000" end="00:02.000">from db</p></div></body></tt>"#;
+const REMOTE_TTML: &str = r#"<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="00:01.000" end="00:02.000">from remote</p></div></body></tt>"#;
+
+/// 远程层指向本地假服务、SQLite 里有一行 `local.ttml` 的存储
+async fn layered_store() -> (DbLyricStore, Arc<std::sync::atomic::AtomicUsize>) {
+    let conn = init_db("sqlite::memory:").await.expect("init db");
+    let parsed = ttml_processor::parse_ttml(DB_TTML).expect("sample ttml");
+    let model =
+        crate::services::sync_service::build_entity_from_ttml("local.ttml", DB_TTML, &parsed);
+    entity::Entity::insert(entity::ActiveModel::from(model))
+        .exec(&conn)
+        .await
+        .expect("seed row");
+
+    let (base, hits) = fake_remote().await;
+    let mut store = DbLyricStore::new(conn).with_remote_base(&base);
+    // 本机若配了 HTTP(S)_PROXY，环回地址也别走代理
+    store.client = Client::builder().no_proxy().build().expect("client");
+    (store, hits)
+}
+
+async fn delete_all_rows(store: &DbLyricStore) {
+    entity::Entity::delete_many()
+        .exec(&store.conn)
+        .await
+        .expect("delete rows");
+}
+
+fn remote_hits(hits: &std::sync::atomic::AtomicUsize) -> usize {
+    hits.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[tokio::test]
+async fn fetch_lyric_ttml_reads_sqlite_then_serves_from_cache() {
+    let (store, hits) = layered_store().await;
+
+    assert_eq!(store.fetch_lyric_ttml("local.ttml").await.unwrap(), DB_TTML);
+    assert!(store.ttml_cache.get("local.ttml").await.is_some());
+
+    // 行删掉后仍命中缓存，且整个过程没有碰远程
+    delete_all_rows(&store).await;
+    assert_eq!(store.fetch_lyric_ttml("local.ttml").await.unwrap(), DB_TTML);
+    assert_eq!(remote_hits(&hits), 0);
+}
+
+#[tokio::test]
+async fn fetch_lyric_ttml_prefers_cache_over_sqlite() {
+    let (store, _) = layered_store().await;
+    store
+        .ttml_cache
+        .insert("local.ttml".to_string(), "cached".to_string())
+        .await;
+
+    assert_eq!(
+        store.fetch_lyric_ttml("local.ttml").await.unwrap(),
+        "cached"
+    );
+}
+
+#[tokio::test]
+async fn fetch_lyric_ttml_falls_back_to_remote_once() {
+    let (store, hits) = layered_store().await;
+
+    assert_eq!(
+        store.fetch_lyric_ttml("remote.ttml").await.unwrap(),
+        REMOTE_TTML
+    );
+    assert_eq!(
+        store.fetch_lyric_ttml("remote.ttml").await.unwrap(),
+        REMOTE_TTML
+    );
+    assert_eq!(remote_hits(&hits), 1, "second call is served from cache");
+}
+
+#[tokio::test]
+async fn fetch_lyric_ttml_remote_miss_is_upstream_error_and_not_cached() {
+    let (store, hits) = layered_store().await;
+
+    for _ in 0..2 {
+        assert!(matches!(
+            store.fetch_lyric_ttml("missing.ttml").await,
+            Err(AppError::UpstreamError(_))
+        ));
+    }
+    assert_eq!(remote_hits(&hits), 2, "failures are retried, not cached");
+    assert!(store.ttml_cache.get("missing.ttml").await.is_none());
+}
+
+#[tokio::test]
+async fn fetch_parsed_lyric_caches_formatted_result() {
+    let (store, _) = layered_store().await;
+
+    let parsed = store.fetch_parsed_lyric("local.ttml").await.unwrap();
+    assert!(
+        parsed
+            .plain_lyrics
+            .as_deref()
+            .is_some_and(|t| t.contains("from db"))
+    );
+    assert!(
+        store
+            .formatted_lyric_cache
+            .get("local.ttml")
+            .await
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn invalidate_caches_clears_both_layers() {
+    let (store, hits) = layered_store().await;
+    store.fetch_parsed_lyric("local.ttml").await.unwrap();
+    store.fetch_parsed_lyric("remote.ttml").await.unwrap();
+    assert_eq!(remote_hits(&hits), 1);
+
+    store.invalidate_caches();
+
+    for name in ["local.ttml", "remote.ttml"] {
+        assert!(store.ttml_cache.get(name).await.is_none(), "{name}");
+        assert!(
+            store.formatted_lyric_cache.get(name).await.is_none(),
+            "{name}"
+        );
+    }
+    // 失效后重新走 SQLite / 远程
+    store.fetch_parsed_lyric("remote.ttml").await.unwrap();
+    assert_eq!(remote_hits(&hits), 2);
+    delete_all_rows(&store).await;
+    assert!(matches!(
+        store.fetch_lyric_ttml("local.ttml").await,
+        Err(AppError::UpstreamError(_))
+    ));
+}

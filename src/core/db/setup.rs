@@ -9,7 +9,11 @@ use sea_orm::{
     DatabaseConnection,
     DbErr,
 };
-use tracing::info;
+use tracing::{
+    error,
+    info,
+    warn,
+};
 
 const CREATE_LYRICS_TABLE_SQL: &str = r"
 CREATE TABLE IF NOT EXISTS lyrics (
@@ -100,7 +104,7 @@ pub async fn init_db(db_url: &str) -> Result<DatabaseConnection, DbErr> {
         && !parent.exists()
         && let Err(e) = fs::create_dir_all(parent)
     {
-        tracing::error!("Failed to create database directory {parent:?}: {e}");
+        error!("Failed to create database directory {parent:?}: {e}");
     }
 
     let db = Database::connect(db_url).await?;
@@ -114,7 +118,7 @@ pub async fn init_db(db_url: &str) -> Result<DatabaseConnection, DbErr> {
     let fts_res = db.execute_unprepared(CREATE_LYRICS_FTS_TABLE_SQL).await;
 
     if let Err(e) = fts_res {
-        tracing::warn!("Failed to create FTS5 table (might not be supported by sqlite build): {e}");
+        warn!("Failed to create FTS5 table (might not be supported by sqlite build): {e}");
     } else {
         let _ = db
             .execute_unprepared(
@@ -123,7 +127,7 @@ pub async fn init_db(db_url: &str) -> Result<DatabaseConnection, DbErr> {
             .await;
         for t in FTS_TRIGGERS {
             if let Err(e) = db.execute_unprepared(t).await {
-                tracing::warn!("Failed to create FTS trigger: {e}");
+                warn!("Failed to create FTS trigger: {e}");
             }
         }
     }

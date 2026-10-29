@@ -3,6 +3,11 @@
 //! 内部接口，不写进公开接口文档。用 `ADMIN_SECRET` 做 Bearer 鉴权；所有响应（含错误）
 //! 一律 `no-store`，带着 token 的内容不该留在任何缓存里
 
+use std::time::{
+    SystemTime,
+    UNIX_EPOCH,
+};
+
 use axum::{
     extract::{
         Multipart,
@@ -23,7 +28,9 @@ use axum::{
 };
 use sea_orm::{
     DatabaseConnection,
+    DbErr,
     EntityTrait,
+    SqlErr,
 };
 use serde::Serialize;
 use sha2::{
@@ -37,6 +44,7 @@ use crate::{
     api::shared::{
         cache::NO_STORE_CACHE_CONTROL,
         dto::ApiSuccess,
+        query::has_ttml_extension,
     },
     core::{
         LyricId,
@@ -114,27 +122,27 @@ async fn upload_lyrics_batch(
 ) -> Result<ApiSuccess<UploadLyricsBatchData>, AppError> {
     authorize_admin(state, headers)?;
     let mut multipart =
-        multipart.map_err(|e| AppError::BadRequest(format!("Invalid multipart body: {e}")))?;
+        multipart.map_err(|e| AppError::BadRequest(format!("Invalid multipart body: {e}.")))?;
     let mut files = Vec::new();
 
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|e| AppError::BadRequest(format!("Invalid multipart body: {e}")))?
+        .map_err(|e| AppError::BadRequest(format!("Invalid multipart body: {e}.")))?
     {
         if field.name() != Some("file") {
             continue;
         }
         if files.len() == MAX_BATCH_FILES {
             return Err(AppError::BadRequest(format!(
-                "Too many files (max {MAX_BATCH_FILES})"
+                "Too many files (max {MAX_BATCH_FILES})."
             )));
         }
         let filename = field.file_name().unwrap_or_default().to_string();
         let bytes = field
             .bytes()
             .await
-            .map_err(|e| AppError::BadRequest(format!("Invalid file field: {e}")))?;
+            .map_err(|e| AppError::BadRequest(format!("Invalid file field: {e}.")))?;
         files.push((filename, bytes.to_vec()));
     }
 
@@ -147,11 +155,11 @@ async fn process_batch_upload(
     files: Vec<(String, Vec<u8>)>,
 ) -> Result<UploadLyricsBatchData, AppError> {
     if files.is_empty() {
-        return Err(AppError::BadRequest("Missing 'file' field".to_string()));
+        return Err(AppError::BadRequest("Missing 'file' field.".to_string()));
     }
     if files.len() > MAX_BATCH_FILES {
         return Err(AppError::BadRequest(format!(
-            "Too many files (max {MAX_BATCH_FILES})"
+            "Too many files (max {MAX_BATCH_FILES})."
         )));
     }
 
@@ -161,7 +169,7 @@ async fn process_batch_upload(
         let result = async {
             let filename = validate_filename(&filename)?;
             let content = std::str::from_utf8(&bytes)
-                .map_err(|_| AppError::BadRequest("file is not valid UTF-8".to_string()))?;
+                .map_err(|_| AppError::BadRequest("File is not valid UTF-8.".to_string()))?;
             upsert_private_lyric(&state.store.conn, &filename, content).await
         }
         .await;
@@ -176,7 +184,7 @@ async fn process_batch_upload(
                     AppError::BadRequest(message) | AppError::InternalServerError(message) => {
                         message
                     }
-                    _ => "Failed to save lyric".to_string(),
+                    _ => "Failed to save lyric.".to_string(),
                 };
                 (None, None, Some(message))
             }
@@ -196,7 +204,7 @@ async fn process_batch_upload(
             Err(e) => {
                 error!("batch upload index rebuild failed: {e:?}");
                 return Err(AppError::InternalServerError(
-                    "Lyric saved but index rebuild failed".to_string(),
+                    "Lyric saved but index rebuild failed.".to_string(),
                 ));
             }
         }
@@ -222,13 +230,13 @@ async fn upload_lyric(
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|e| AppError::BadRequest(format!("Invalid multipart body: {e}")))?
+        .map_err(|e| AppError::BadRequest(format!("Invalid multipart body: {e}.")))?
     {
         match field.name() {
             Some("filename") => {
                 filename_raw =
                     Some(field.text().await.map_err(|e| {
-                        AppError::BadRequest(format!("Invalid filename field: {e}"))
+                        AppError::BadRequest(format!("Invalid filename field: {e}."))
                     })?);
             }
             Some("file") => {
@@ -236,7 +244,7 @@ async fn upload_lyric(
                     field
                         .bytes()
                         .await
-                        .map_err(|e| AppError::BadRequest(format!("Invalid file field: {e}")))?
+                        .map_err(|e| AppError::BadRequest(format!("Invalid file field: {e}.")))?
                         .to_vec(),
                 );
             }
@@ -244,14 +252,14 @@ async fn upload_lyric(
         }
     }
 
-    let filename_raw =
-        filename_raw.ok_or_else(|| AppError::BadRequest("Missing 'filename' field".to_string()))?;
+    let filename_raw = filename_raw
+        .ok_or_else(|| AppError::BadRequest("Missing 'filename' field.".to_string()))?;
     let file_bytes =
-        file_bytes.ok_or_else(|| AppError::BadRequest("Missing 'file' field".to_string()))?;
+        file_bytes.ok_or_else(|| AppError::BadRequest("Missing 'file' field.".to_string()))?;
 
     let filename = validate_filename(&filename_raw)?;
     let content = String::from_utf8(file_bytes)
-        .map_err(|_| AppError::BadRequest("file is not valid UTF-8".to_string()))?;
+        .map_err(|_| AppError::BadRequest("File is not valid UTF-8.".to_string()))?;
 
     let saved = upsert_private_lyric(&state.store.conn, &filename, &content).await?;
 
@@ -262,7 +270,7 @@ async fn upload_lyric(
         Err(e) => {
             error!("upload index rebuild failed: {e:?}");
             return Err(AppError::InternalServerError(
-                "Lyric saved but index rebuild failed".to_string(),
+                "Lyric saved but index rebuild failed.".to_string(),
             ));
         }
     }
@@ -293,7 +301,7 @@ async fn upsert_private_lyric(
         if msg.len() > 300 {
             msg.truncate(300);
         }
-        AppError::BadRequest(format!("Invalid TTML: {msg}"))
+        AppError::BadRequest(format!("Invalid TTML: {msg}."))
     })?;
 
     let music_name = result
@@ -308,6 +316,10 @@ async fn upsert_private_lyric(
     let mut model = build_entity_from_ttml(filename, content, &result);
     merge_ttml_platform_ids(&mut model, &result.metadata);
     model.source = "private".to_string();
+    // 私库文件名不带公库那样的时间戳前缀，按文件名派生会兜底成 0，
+    // 在 `/lyrics/list` 默认排序里沉底、被 `since` 过滤掉。改用上传时刻；
+    // 同名重传会刷新它，让 `since` 增量拉取能看到这次更新
+    model.timestamp = now_millis();
     model.id = LyricId::from_private_filename(filename).get().cast_signed();
 
     let active: entity::ActiveModel = model.into();
@@ -342,11 +354,11 @@ async fn upsert_private_lyric(
         .exec(conn)
         .await
         .map_err(|e| {
-            error!("private lyric upsert failed: {e:?}");
-            if e.to_string().to_lowercase().contains("unique") {
-                AppError::BadRequest("filename already exists in the public library".to_string())
+            if is_public_filename_conflict(&e) {
+                AppError::BadRequest("Filename already exists in the public library.".to_string())
             } else {
-                AppError::InternalServerError("Failed to save lyric".to_string())
+                error!("private lyric upsert failed: {e:?}");
+                AppError::InternalServerError("Failed to save lyric.".to_string())
             }
         })?;
 
@@ -356,29 +368,51 @@ async fn upsert_private_lyric(
     })
 }
 
+/// upsert 失败是否因为公库已有同名文件
+///
+/// 私库行自身的冲突键是 `(source, filename)`，已由 `ON CONFLICT` 转成更新；
+/// 能漏到这里的唯一约束只有 `lyrics.filename` 列级 `UNIQUE`（与公库同名）与主键。
+/// SQLite 不报约束名，只能从结构化的 [`SqlErr::UniqueConstraintViolation`] 里取出
+/// 驱动消息，再按 SQLite 固定的 `UNIQUE constraint failed: <表>.<列>` 格式认列名，
+/// 把主键冲突等其他情况留给 500
+fn is_public_filename_conflict(err: &DbErr) -> bool {
+    matches!(
+        err.sql_err(),
+        Some(SqlErr::UniqueConstraintViolation(msg))
+            if msg == "UNIQUE constraint failed: lyrics.filename"
+    )
+}
+
 fn validate_filename(raw: &str) -> Result<String, AppError> {
     let name = raw.trim();
     if name.is_empty() {
         return Err(AppError::BadRequest(
-            "filename must not be empty".to_string(),
+            "Filename must not be empty.".to_string(),
         ));
     }
     if name.len() > 255 {
         return Err(AppError::BadRequest(
-            "filename too long (max 255 bytes)".to_string(),
+            "Filename too long (max 255 bytes).".to_string(),
         ));
     }
-    if !name.to_lowercase().ends_with(".ttml") {
+    if !has_ttml_extension(name) {
         return Err(AppError::BadRequest(
-            "filename must end with .ttml".to_string(),
+            "Filename must end with '.ttml'.".to_string(),
         ));
     }
     if name.contains('/') || name.contains('\\') || name.contains("..") {
         return Err(AppError::BadRequest(
-            "filename must not contain path separators".to_string(),
+            "Filename must not contain path separators.".to_string(),
         ));
     }
     Ok(name.to_string())
+}
+
+/// 当前时刻的 Unix epoch 毫秒，作为私库条目的 `createdAt`
+fn now_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
 /// 未配置密钥是服务端配置错误；Bearer 缺失或不匹配是 401

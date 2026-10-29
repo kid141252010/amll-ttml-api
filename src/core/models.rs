@@ -5,6 +5,7 @@ use serde::{
     Deserialize,
     Serialize,
 };
+use tracing::warn;
 
 use crate::core::{
     LyricId,
@@ -51,11 +52,17 @@ impl LyricSource {
     }
 }
 
+/// 库里 `source` 列的取值只有 `public` / `private`；其他值说明数据被意外改写，
+/// 打 warn 后按公库处理，不让单条脏数据阻断索引重建
 impl From<&str> for LyricSource {
     fn from(s: &str) -> Self {
         match s {
             "private" => Self::Private,
-            _ => Self::Public,
+            "public" => Self::Public,
+            other => {
+                warn!("Unknown lyric source {other:?}, falling back to 'public'");
+                Self::Public
+            }
         }
     }
 }
