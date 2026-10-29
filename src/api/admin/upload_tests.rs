@@ -760,3 +760,82 @@ async fn batch_route_returns_music_name_per_result() {
     assert!(results[2]["musicName"].is_null());
     assert!(results[2]["error"].is_string());
 }
+
+async fn single_route_saves_private_lyric_under_both_prefixes() {
+    let state = batch_state().await;
+    for prefix in crate::API_PREFIXES {
+        let request = multipart_request(
+            &format!("{prefix}/admin/lyrics"),
+            &[
+                ("filename", None, "Mine.TTML"),
+                ("file", Some("ignored-part-name.ttml"), SAMPLE_TTML),
+            ],
+        );
+        let (status, json) = upload_response(&state, request).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], 200);
+        assert_eq!(
+            json["data"]["id"],
+            LyricId::from_private_filename("Mine.TTML").get()
+        );
+        assert_eq!(json["data"]["filename"], "Mine.TTML");
+        assert_eq!(json["data"]["source"], "private");
+    }
+
+    // 两个前缀写的是同一行；上传后立即进索引
+    let entries = fetch_song_entries(&state.store.conn)
+        .await
+        .expect("entries");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].source, LyricSource::Private);
+    assert_created_at_is_now(entries[0].timestamp);
+    assert_eq!(state.store.lyric_count(), 1);
+
+    // 大写后缀在 `/lyrics/get?filename=` 侧同样被接受，并按原名精确命中
+    let response = create_app(state.clone())
+        .oneshot(
+            Request::get("/v1/lyrics/get?filename=Mine.TTML")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let json: Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(json["data"]["filename"], "Mine.TTML");
+    assert_eq!(json["data"]["source"], "private");
+}
+
+#[tokio::test]
+async fn single_route_requires_admin_secret() {
+    let state = batch_state().await;
+    for token in [None, Some("Bearer wrong"), Some("s3cret")] {
+        let mut request = multipart_request(
+            "/v1/admin/lyrics",
+            &[
+                ("filename", None, "a.ttml"),
+                ("file", Some("a.ttml"), SAMPLE_TTML),
+            ],
+        );
+        request.headers_mut().remove(AUTHORIZATION);
+        if let Some(token) = token {
+            request
+                .headers_mut()
+                .insert(AUTHORIZATION, token.parse().unwrap());
+        }
+        let (status, json) = upload_response(&state, request).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{token:?}");
+        assert_eq!(json["status"], 401);
+        assert_eq!(json["error"], "Unauthorized");
+    }
+    assert!(
+        fetch_song_entries(&state.store.conn)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(state.store.lyric_count(), 0);
+}
