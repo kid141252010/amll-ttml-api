@@ -104,3 +104,7 @@ pub async fn handle_get_by_id(
         Json(map_to_lrclib_item(&entry, Some(&formatted))),
     ))
 }
+
+#[cfg(test)]
+#[path = "handler_tests.rs"]
+mod tests;

@@ -1102,3 +1102,67 @@ fn search_by_fields_authors_on_different_entries_yield_empty() {
     };
     assert_eq!(searched_names(&db, &query), ["bare.ttml"]);
 }
+
+// --- best_match_by_fields：分数优先，同档私库优先 ---
+
+fn private_song(filename: &str, track: &str, artists: &[&str]) -> SongEntry {
+    use crate::core::models::LyricSource;
+    let mut entry = make_song(filename, 1, &[track], artists, &[], &[], &[], &[]);
+    entry.source = LyricSource::Private;
+    entry.id = LyricId::from_private_filename(filename);
+    entry
+}
+
+fn hello_adele_query() -> SearchQuery {
+    SearchQuery {
+        track_name: Some("Hello".to_string()),
+        artist_name: Some("Adele".to_string()),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn best_match_by_fields_prefers_higher_score_over_private_source() {
+    let db = LyricIndexDB::from_entries(vec![
+        make_song("pub.ttml", 1, &["Hello"], &["Adele"], &[], &[], &[], &[]),
+        private_song("priv.ttml", "Hello World", &["Adele"]),
+    ]);
+    let query = hello_adele_query();
+
+    // 列表顺序仍是私库优先，不受影响
+    assert_eq!(
+        db.search_by_fields(&query)[0].entry.filename.as_str(),
+        "priv.ttml"
+    );
+
+    let best = db.best_match_by_fields(&query).unwrap();
+    assert_eq!(best.entry.filename.as_str(), "pub.ttml");
+    assert_eq!(best.score, MatchType::Perfect);
+}
+
+#[test]
+fn best_match_by_fields_prefers_private_within_same_score() {
+    let db = LyricIndexDB::from_entries(vec![
+        make_song("pub.ttml", 1, &["Hello"], &["Adele"], &[], &[], &[], &[]),
+        private_song("priv.ttml", "Hello", &["Adele"]),
+    ]);
+
+    let best = db.best_match_by_fields(&hello_adele_query()).unwrap();
+    assert_eq!(best.entry.filename.as_str(), "priv.ttml");
+    assert_eq!(best.score, MatchType::Perfect);
+}
+
+#[test]
+fn best_match_by_fields_returns_none_without_hits() {
+    let db = LyricIndexDB::from_entries(vec![make_song(
+        "pub.ttml",
+        1,
+        &["Goodbye"],
+        &["Adele"],
+        &[],
+        &[],
+        &[],
+        &[],
+    )]);
+    assert!(db.best_match_by_fields(&hello_adele_query()).is_none());
+}

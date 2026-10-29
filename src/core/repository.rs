@@ -188,6 +188,21 @@ impl LyricIndexDB {
         scored_results
     }
 
+    /// `/api/v1/lrclib/get` 的唯一最佳匹配：分数优先，同档才轮到私库优先
+    ///
+    /// [`Self::search_by_fields`] 的列表顺序是来源优先（列表页的产品预期），直接取其首条
+    /// 会让低分私库命中盖过高分公库命中。这里在同一批命中上改按分数降序、来源、
+    /// 时间戳降序、id 取首条，调用方据此判断是否够 `Medium`
+    pub fn best_match_by_fields(&self, query: &SearchQuery) -> Option<MetadataHit<'_>> {
+        self.search_by_fields(query).into_iter().min_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then_with(|| a.entry.source.rank().cmp(&b.entry.source.rank()))
+                .then_with(|| b.entry.timestamp.cmp(&a.entry.timestamp))
+                .then_with(|| a.entry.id.cmp(&b.entry.id))
+        })
+    }
+
     /// `/api/v1/lyrics/list` 的结构化过滤，返回命中条目在 [`Self::entries`] 里的下标
     ///
     /// 作者维度有倒排索引可用，先用它把候选集缩到该作者的投稿；`hasId` / `missingId`

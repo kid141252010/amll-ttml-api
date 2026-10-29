@@ -1004,3 +1004,96 @@ async fn lrclib_get_by_id_returns_entry_and_parsed_lyric() {
     let err = lrclib_get_by_id(&store, LyricId::from_u64(9999).unwrap()).await;
     assert!(matches!(err, Err(AppError::LyricNotFound)));
 }
+
+// --- lrclib_get_by_fields：按全局最佳分数选取，同档私库优先 ---
+
+fn private_song(filename: &str, track: &str, artists: &[&str]) -> SongEntry {
+    let mut entry = make_song(filename, 1, &[track], artists, &[], &[], &[], &[]);
+    entry.source = LyricSource::Private;
+    entry.id = LyricId::from_private_filename(filename);
+    entry
+}
+
+fn public_song(filename: &str, track: &str, artists: &[&str]) -> SongEntry {
+    make_song(filename, 1, &[track], artists, &[], &[], &[], &[])
+}
+
+fn store_with(entries: Vec<SongEntry>) -> MemoryLyricStore {
+    let ttml_map = entries
+        .iter()
+        .map(|e| (e.filename.to_string(), sample_ttml()))
+        .collect();
+    MemoryLyricStore {
+        db: Arc::new(LyricIndexDB::from_entries(entries)),
+        ttml_map,
+        fts_results: HashMap::new(),
+        snippet_requests: Mutex::new(Vec::new()),
+    }
+}
+
+fn hello_adele_query() -> SearchQuery {
+    SearchQuery {
+        track_name: Some("Hello".to_string()),
+        artist_name: Some("Adele".to_string()),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn lrclib_get_by_fields_public_perfect_beats_private_approximate() {
+    let public = public_song("pub.ttml", "Hello", &["Adele"]);
+    let public_id = public.id;
+    let store = store_with(vec![
+        public,
+        private_song("priv.ttml", "Hello World", &["Adele"]),
+    ]);
+
+    let (entry, _) = lrclib_get_by_fields(&store, &hello_adele_query())
+        .await
+        .unwrap();
+    assert_eq!(entry.id, public_id);
+}
+
+#[tokio::test]
+async fn lrclib_get_by_fields_same_score_prefers_private() {
+    let private = private_song("priv.ttml", "Hello", &["Adele"]);
+    let private_id = private.id;
+    let store = store_with(vec![public_song("pub.ttml", "Hello", &["Adele"]), private]);
+
+    let (entry, _) = lrclib_get_by_fields(&store, &hello_adele_query())
+        .await
+        .unwrap();
+    assert_eq!(entry.id, private_id);
+}
+
+#[tokio::test]
+async fn lrclib_get_by_fields_low_private_hit_does_not_shadow_public() {
+    // 歌名不同 + 歌手只交一半，得分低于 Medium
+    let public = public_song("pub.ttml", "Hello", &["Adele"]);
+    let public_id = public.id;
+    let store = store_with(vec![
+        public,
+        private_song("priv.ttml", "Hello World", &["Adele", "X"]),
+    ]);
+    let hits = store.db.search_by_fields(&hello_adele_query());
+    assert_eq!(hits[0].entry.filename.as_str(), "priv.ttml");
+    assert!(hits[0].score < MatchType::Medium);
+
+    let (entry, _) = lrclib_get_by_fields(&store, &hello_adele_query())
+        .await
+        .unwrap();
+    assert_eq!(entry.id, public_id);
+}
+
+#[tokio::test]
+async fn lrclib_get_by_fields_all_hits_below_medium_is_not_found() {
+    let store = store_with(vec![
+        private_song("priv.ttml", "Hello World", &["Adele", "X"]),
+        public_song("pub.ttml", "Hello Again", &["Adele", "Y"]),
+    ]);
+    // 确认确实有命中，只是都不够 Medium
+    assert!(!store.db.search_by_fields(&hello_adele_query()).is_empty());
+
+    let err = lrclib_get_by_fields(&store, &hello_adele_query()).await;
+    assert!(matches!(err, Err(AppError::LyricNotFound)));
+}
