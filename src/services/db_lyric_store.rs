@@ -1,6 +1,7 @@
 //! 生产环境的歌词存储库，负责获取和更新歌词数据
 
 use std::{
+    collections::HashMap,
     sync::Arc,
     time::Duration,
 };
@@ -12,13 +13,16 @@ use sea_orm::DatabaseConnection;
 
 use crate::{
     core::{
+        LyricId,
         db::queries::{
+            fetch_fts_snippets,
             fetch_song_entries,
             find_raw_ttml,
             search_fts,
         },
         error::AppError,
         models::{
+            FtsFilter,
             LyricHit,
             LyricIndexDB,
         },
@@ -141,9 +145,18 @@ impl DbLyricStore {
     pub async fn search_lyrics_fts(
         &self,
         keyword: &str,
-        limit: u64,
+        filter: &FtsFilter,
     ) -> Result<Vec<LyricHit>, AppError> {
-        search_fts(&self.conn, keyword, limit).await
+        search_fts(&self.conn, keyword, filter).await
+    }
+
+    /// 为一页 FTS 命中补取 snippet
+    pub async fn fetch_lyric_snippets(
+        &self,
+        keyword: &str,
+        ids: &[LyricId],
+    ) -> Result<HashMap<LyricId, String>, AppError> {
+        fetch_fts_snippets(&self.conn, keyword, ids).await
     }
 }
 
@@ -179,9 +192,17 @@ impl LyricStore for DbLyricStore {
     async fn search_lyrics_fts(
         &self,
         keyword: &str,
-        limit: u64,
+        filter: &FtsFilter,
     ) -> Result<Vec<LyricHit>, AppError> {
-        self.search_lyrics_fts(keyword, limit).await
+        self.search_lyrics_fts(keyword, filter).await
+    }
+
+    async fn fetch_lyric_snippets(
+        &self,
+        keyword: &str,
+        ids: &[LyricId],
+    ) -> Result<HashMap<LyricId, String>, AppError> {
+        self.fetch_lyric_snippets(keyword, ids).await
     }
 
     async fn load_index(&self) -> Arc<LyricIndexDB> {

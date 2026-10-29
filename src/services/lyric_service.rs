@@ -26,6 +26,7 @@ use crate::{
         },
         matcher::MatchType,
         models::{
+            FtsFilter,
             IdQuery,
             LyricHit,
             LyricSearchResult,
@@ -47,27 +48,20 @@ use crate::{
     utils::ttml::TTMLFormatResult,
 };
 
-/// FTS 候选窗口相对页大小的冗余倍数
-///
-/// FTS 命中需要和元数据命中合并并去重，窗口里相当一部分条目会跟元数据重复，
-/// 保留冗余才能保证合并后仍有足够候选供翻页
-const FTS_WINDOW_FACTOR: u64 = 3;
-/// FTS 候选窗口上限，防止深翻页把 SQL LIMIT 撑到不可控
-const FTS_WINDOW_CAP: u64 = 500;
 /// 元数据粗筛命中数量低于此阈值时，认为元数据命中所选偏弱，触发 FTS5 正文检索补全
 const FTS_TRIGGER_MIN_HITS: usize = 10;
 /// lrclib 搜索逐条拉取解析歌词的并发上限
 const CONCURRENT_FETCH_LIMIT: usize = 10;
 
-/// 按翻页深度动态放大 FTS 候选窗口，并限制到 `FTS_WINDOW_CAP`
-fn fts_window(pagination: Pagination) -> u64 {
-    pagination
-        .page
-        .saturating_mul(pagination.page_size)
-        .saturating_mul(FTS_WINDOW_FACTOR)
-        .min(FTS_WINDOW_CAP)
-}
-
+/// 歌词搜索：元数据命中与 FTS 正文命中合并、全序排序后分页
+///
+/// FTS 取的是满足来源 / 作者条件的**完整**命中集（条件在 SQL 里与 MATCH 同时生效），
+/// 不按页截断窗口，所以下面的合并作用在完整集合上，`total` 是真实匹配数：
+/// - 显式 `lyricText`：元数据命中 ∩ 正文命中（元数据条件全空时元数据命中即全库，
+///   退化为全部正文命中）
+/// - `q` 降级触发的正文补全：元数据命中 ∪ 正文命中，按 id 去重
+///
+/// 正文命中只带 id / rank / 命中列，snippet 在分页之后只为本页条目补取
 pub async fn search_lyric<R: LyricStore>(
     store: &R,
     query: &SearchQuery,
@@ -76,26 +70,26 @@ pub async fn search_lyric<R: LyricStore>(
     let db = store.load_index().await;
     let metadata_hits = db.search_by_fields(query);
 
-    let mut lyric_hits =
-        fetch_lyric_hits_if_needed(store, query, &metadata_hits, fts_window(pagination)).await;
-
-    // FTS 不认识来源，按索引里的条目补一道过滤，否则 source=private 时公库条目会经正文命中漏进来。
-    // 索引里查不到的命中无从判断来源，一并剔除
-    if let Some(source) = query.source {
-        lyric_hits.retain(|hit| {
-            db.id_idx
-                .get(&hit.id)
-                .is_some_and(|&idx| db.entries[idx].source == source)
-        });
-    }
+    let fts_keyword = fts_keyword_if_needed(query, &metadata_hits);
+    let lyric_hits = match fts_keyword {
+        Some(kw) => fetch_lyric_hits(store, kw, &FtsFilter::from(query)).await,
+        None => Vec::new(),
+    };
 
     let sorted_hits =
         merge_and_sort_hits(&db, metadata_hits, lyric_hits, query.lyric_text.is_some());
 
-    paginate(sorted_hits, pagination, |hit| LyricSearchResult {
+    let mut paginated = paginate(sorted_hits, pagination, |hit| LyricSearchResult {
         entry: hit.entry.clone(),
         lyric_hit: hit.lyric_hit,
-    })
+    });
+    drop(db);
+
+    if let Some(kw) = fts_keyword {
+        attach_snippets(store, kw, &mut paginated.items).await;
+    }
+
+    paginated
 }
 
 /// 歌词列表，按请求指定的维度和方向排序后分页，可带结构化过滤
@@ -195,12 +189,11 @@ fn first_name(names: &[CompactString]) -> &str {
     names.first().map_or("", |name| name.as_str())
 }
 
-async fn fetch_lyric_hits_if_needed<R: LyricStore>(
-    store: &R,
-    query: &SearchQuery,
+/// 决定是否需要 FTS 正文检索，需要时返回所用关键词
+fn fts_keyword_if_needed<'q>(
+    query: &'q SearchQuery,
     metadata_hits: &[MetadataHit<'_>],
-    fts_window: u64,
-) -> Vec<LyricHit> {
+) -> Option<&'q str> {
     // 计算仅凭元数据搜索的结果是否较弱，如果较低，或者结果较少，我们需要继续匹配歌词正文
     // 如果元数据已经足够精确了，并且用户没有明确要求去查歌词正文，那我们就不用继续匹配正文了
     let is_weak = metadata_hits.is_empty()
@@ -209,22 +202,50 @@ async fn fetch_lyric_hits_if_needed<R: LyricStore>(
             .is_none_or(|h| h.score < MatchType::Medium)
         || metadata_hits.len() < FTS_TRIGGER_MIN_HITS;
 
-    let fts_keyword = match (&query.lyric_text, &query.global_keyword) {
-        (Some(explicit), _) => Some(explicit.clone()),
-        (None, Some(global_q)) if is_weak => Some(global_q.clone()),
+    match (&query.lyric_text, &query.global_keyword) {
+        (Some(explicit), _) => Some(explicit.as_str()),
+        (None, Some(global_q)) if is_weak => Some(global_q.as_str()),
         _ => None,
+    }
+}
+
+async fn fetch_lyric_hits<R: LyricStore>(
+    store: &R,
+    keyword: &str,
+    filter: &FtsFilter,
+) -> Vec<LyricHit> {
+    match store.search_lyrics_fts(keyword, filter).await {
+        Ok(hits) => hits,
+        Err(e) => {
+            tracing::error!("SQLite FTS5 lyric search failed for keyword '{keyword}': {e:?}");
+            Vec::new()
+        }
+    }
+}
+
+/// 为本页带正文命中的条目补上 snippet；补取失败时 snippet 留空，不影响命中本身
+async fn attach_snippets<R: LyricStore>(store: &R, keyword: &str, items: &mut [LyricSearchResult]) {
+    let ids: Vec<LyricId> = items
+        .iter()
+        .filter(|item| item.lyric_hit.is_some())
+        .map(|item| item.entry.id)
+        .collect();
+    if ids.is_empty() {
+        return;
+    }
+
+    let mut snippets = match store.fetch_lyric_snippets(keyword, &ids).await {
+        Ok(snippets) => snippets,
+        Err(e) => {
+            tracing::error!("SQLite FTS5 snippet fetch failed for keyword '{keyword}': {e:?}");
+            return;
+        }
     };
 
-    if let Some(ref kw) = fts_keyword {
-        match store.search_lyrics_fts(kw, fts_window).await {
-            Ok(hits) => hits,
-            Err(e) => {
-                tracing::error!("SQLite FTS5 lyric search failed for keyword '{kw}': {e:?}");
-                Vec::new()
-            }
+    for item in items {
+        if let Some(ref mut lyric_hit) = item.lyric_hit {
+            lyric_hit.snippet = snippets.remove(&item.entry.id);
         }
-    } else {
-        Vec::new()
     }
 }
 
