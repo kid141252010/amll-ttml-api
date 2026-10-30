@@ -159,3 +159,14 @@ button:not(:disabled):hover { filter: brightness(1.1); }
 }
 
 #page-info { color: var(--dim); font-size: 0.9rem; }
+
+.site-footer {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--dim);
+}
+
+.site-footer a { color: #7aa2f7; text-decoration: none; }
+.site-footer a:hover { text-decoration: underline; }
