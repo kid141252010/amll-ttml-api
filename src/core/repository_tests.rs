@@ -646,6 +646,36 @@ fn search_by_global_keyword() {
 }
 
 #[test]
+fn search_title_containing_me_via_q_and_music_name() {
+    let db = LyricIndexDB::from_entries(vec![make_song(
+        "what-are-we.ttml",
+        100,
+        &["我们之间到底算什么呢", "我们之间到底算什么呢 (What Are We)"],
+        &["蒲熠星"],
+        &[],
+        &[],
+        &[],
+        &[],
+    )]);
+    let full_title = "我们之间到底算什么呢";
+
+    for query in [
+        SearchQuery {
+            global_keyword: Some(full_title.into()),
+            ..Default::default()
+        },
+        SearchQuery {
+            track_name: Some(full_title.into()),
+            ..Default::default()
+        },
+    ] {
+        let result = db.search_by_fields(&query);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].entry.filename.as_str(), "what-are-we.ttml");
+    }
+}
+
+#[test]
 fn search_no_results() {
     let db = LyricIndexDB::from_entries(vec![make_song(
         "a.ttml",
