@@ -15,6 +15,24 @@ fn convert_simplified_unchanged() {
     assert_eq!(result, "爱");
 }
 
+#[test]
+fn convert_simplified_terms_with_me_unchanged() {
+    for input in ["什么", "这么", "为什么", "么"] {
+        assert_eq!(convert_tw2s(input), input);
+    }
+}
+
+#[test]
+fn convert_traditional_terms_to_simplified() {
+    for (input, expected) in [
+        ("什麼", "什么"),
+        ("我們", "我们"),
+        ("現在是什麼時辰了", "现在是什么时辰了"),
+    ] {
+        assert_eq!(convert_tw2s(input), expected);
+    }
+}
+
 // --- normalize_name_for_comparison tests ---
 
 #[test]

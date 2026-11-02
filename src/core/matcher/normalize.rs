@@ -9,7 +9,10 @@ static OPENCC: OnceLock<OpenCC> = OnceLock::new();
 
 fn get_opencc() -> &'static OpenCC {
     OPENCC.get_or_init(|| {
-        OpenCC::from_config(BuiltinConfig::Tw2s).expect("Failed to initialize OpenCC dictionary")
+        // 必须使用纯繁转简的 T2s，而不能使用 Tw2s：Tw2s 的台湾异体字规范化
+        // 会把简体「么」单向改成「幺」。库内 normalized 名称保留「么」，
+        // 会导致含「么」的检索词粗筛永远落空。
+        OpenCC::from_config(BuiltinConfig::T2s).expect("Failed to initialize OpenCC dictionary")
     })
 }
 
